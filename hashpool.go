@@ -2,12 +2,15 @@ package randomizer
 
 import (
 	"hash/maphash"
+	"sync"
 	"sync/atomic"
 )
 
-// hashPool is a custom pool that limits the number of maphash.Hash objects.
+// hashPool pairs a sync.Pool of maphash.Hash objects (for callers that need
+// one via Get/Put) with an atomic SplitMix64 counter used as the package's
+// primary lock-free PRNG.
 type hashPool struct {
-	pool  chan *maphash.Hash
+	pool  sync.Pool
 	state atomic.Uint64
 }
 
@@ -20,58 +23,48 @@ func splitMix64(x uint64) uint64 {
 	return z ^ (z >> 31)
 }
 
-// NewHashPool creates a new hashPool with the specified size.
-// If size is 0, it returns nil. The pool will preallocate size maphash.Hash
-// objects for reuse.
+// NewHashPool creates a new hashPool. Any positive size enables the pool;
+// zero or negative returns nil. Hash objects are allocated on demand by
+// sync.Pool and recycled automatically by the GC.
 func NewHashPool(size int) *hashPool {
 	if size <= 0 {
 		return nil
 	}
 	p := &hashPool{
-		pool: make(chan *maphash.Hash, size),
+		pool: sync.Pool{
+			New: func() any {
+				h := new(maphash.Hash)
+				h.SetSeed(maphash.MakeSeed())
+				return h
+			},
+		},
 	}
 	seed := maphash.Bytes(maphash.MakeSeed(), nil)
 	if seed == 0 {
 		seed = splitMixGamma
 	}
 	p.state.Store(seed)
-	for range size {
-		h := new(maphash.Hash)
-		h.SetSeed(maphash.MakeSeed())
-		p.pool <- h
-	}
 	return p
 }
 
-// Get retrieves a maphash.Hash object from the pool.
-// If the pool is empty, it creates and returns a new maphash.Hash instance.
+// Get retrieves a maphash.Hash from the pool. The caller must call Put to
+// return it after use.
 func (p *hashPool) Get() *maphash.Hash {
 	if p == nil {
 		h := new(maphash.Hash)
 		h.SetSeed(maphash.MakeSeed())
 		return h
 	}
-	select {
-	case h := <-p.pool:
-		return h
-	default:
-		h := new(maphash.Hash)
-		h.SetSeed(maphash.MakeSeed())
-		return h
-	}
+	return p.pool.Get().(*maphash.Hash)
 }
 
-// Put returns a maphash.Hash object to the pool.
-// If the pool is full, the hash object is discarded.
+// Put returns a maphash.Hash to the pool for reuse.
 func (p *hashPool) Put(h *maphash.Hash) {
 	if p == nil || h == nil {
 		return
 	}
 	h.Reset()
-	select {
-	case p.pool <- h:
-	default:
-	}
+	p.pool.Put(h)
 }
 
 func (p *hashPool) next64() uint64 {

@@ -1,5 +1,7 @@
 package randomizer
 
+import "math/bits"
+
 type Integers interface {
 	SignedIntegers | UnsignedIntegers
 }
@@ -12,19 +14,23 @@ type UnsignedIntegers interface {
 	~uint8 | ~uint16 | ~uint | ~uint32 | ~uint64 | ~uintptr
 }
 
-// uniformUint64n returns a uniform value in [0, n).
+// uniformUint64n returns a uniform value in [0, n) using Lemire's fast
+// unbiased integer algorithm. The common case needs only one multiplication;
+// a division occurs only when lo < threshold (probability < 1/n).
 func uniformUint64n(n uint64, rng *wordRNG) uint64 {
 	if n == 0 {
 		return 0
 	}
-	// threshold = 2^64 mod n
-	threshold := (uint64(0) - n) % n
-	for {
-		x := rng.next64()
-		if x >= threshold {
-			return x % n
+	x := rng.next64()
+	hi, lo := bits.Mul64(x, n)
+	if lo < n {
+		threshold := (-n) % n
+		for lo < threshold {
+			x = rng.next64()
+			hi, lo = bits.Mul64(x, n)
 		}
 	}
+	return hi
 }
 
 // Int generates a random signed integer of type T.

@@ -1,5 +1,7 @@
 package randomizer
 
+import "unsafe"
+
 const (
 	deci     string = "0123456789"
 	octi     string = "01234567"
@@ -102,7 +104,7 @@ func (word) Decimal(length int) string {
 	out := make([]byte, length)
 	rng := newWordRNG()
 	fillDecimalNoRepeat(out, &rng)
-	return string(out)
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
 // DecimalBytes generates a random numeric byte slice of the specified length,
@@ -131,7 +133,7 @@ func (word) Hex(length int, uppercase bool) string {
 	out := make([]byte, length)
 	rng := newWordRNG()
 	fillPow2AlphabetNoRepeat(out, dict, 4, &rng)
-	return string(out)
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
 // HexBytes generates a random hexadecimal byte slice of the specified length.
@@ -160,7 +162,7 @@ func (word) Octal(length int) string {
 	out := make([]byte, length)
 	rng := newWordRNG()
 	fillPow2AlphabetNoRepeat(out, octi, 3, &rng)
-	return string(out)
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
 // OctalBytes generates a random octal byte slice of the specified length,
