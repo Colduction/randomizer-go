@@ -14,9 +14,8 @@ type UnsignedIntegers interface {
 	~uint8 | ~uint16 | ~uint | ~uint32 | ~uint64 | ~uintptr
 }
 
-// uniformUint64n returns a uniform value in [0, n) using Lemire's fast
-// unbiased integer algorithm. The common case needs only one multiplication;
-// a division occurs only when lo < threshold (probability < 1/n).
+// uniformUint64n returns a uniform random value in [0, n) using Lemire's algorithm.
+// The common case requires one multiplication; a rejection loop runs with probability < 1/n.
 func uniformUint64n(n uint64, rng *wordRNG) uint64 {
 	if n == 0 {
 		return 0
@@ -33,12 +32,13 @@ func uniformUint64n(n uint64, rng *wordRNG) uint64 {
 	return hi
 }
 
-// Int generates a random signed integer of type T.
+// Int returns a random signed integer of type T.
 func Int[T SignedIntegers]() T {
 	return T(DefaultHashPool.Sum64())
 }
 
-// IntInterval generates a random signed integer of type T within a specified range.
+// IntInterval returns a random signed integer of type T in [min, max].
+// min and max are swapped automatically if min > max.
 func IntInterval[T SignedIntegers](min, max T) T {
 	if min == max {
 		return min
@@ -58,12 +58,13 @@ func IntInterval[T SignedIntegers](min, max T) T {
 	return T(int64((minU + v) ^ signMask))
 }
 
-// Uint generates a random unsigned integer of type T.
+// Uint returns a random unsigned integer of type T.
 func Uint[T UnsignedIntegers]() T {
 	return T(DefaultHashPool.Sum64())
 }
 
-// UintInterval generates a random unsigned integer of type T within a specified range.
+// UintInterval returns a random unsigned integer of type T in [min, max].
+// min and max are swapped automatically if min > max.
 func UintInterval[T UnsignedIntegers](min, max T) T {
 	if min == max {
 		return min
@@ -77,19 +78,13 @@ func UintInterval[T UnsignedIntegers](min, max T) T {
 	return min + T(v)
 }
 
-// Float32 generates a random 32-bit float value in the range [0, 1) using the hashPool.
-// It retrieves a random 32-bit number from the hash pool, keeps the upper 24 bits,
-// and converts it into a float32 by dividing by 2^24 to normalize
-// the value into the range [0, 1).
+// Float32 returns a uniformly distributed random float32 in [0, 1).
 func Float32() float32 {
 	const inv24 = float32(1.0 / (1 << 24))
 	return float32(DefaultHashPool.Sum32()>>8) * inv24
 }
 
-// Float64 generates a random 64-bit float value in the range [0, 1) using the hashPool.
-// It retrieves a random 64-bit number from the hash pool, keeps the upper 53 bits,
-// and converts it into a float64 by dividing by 2^53 to normalize
-// the value into the range [0, 1).
+// Float64 returns a uniformly distributed random float64 in [0, 1).
 func Float64() float64 {
 	const inv53 = float64(1.0 / (1 << 53))
 	return float64(DefaultHashPool.Sum64()>>11) * inv53

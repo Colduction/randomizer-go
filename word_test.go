@@ -3,7 +3,7 @@ package randomizer_test
 import (
 	"testing"
 
-	"github.com/colduction/randomizer"
+	"github.com/colduction/randomizer-go"
 )
 
 var (

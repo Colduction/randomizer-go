@@ -1,7 +1,7 @@
 # randomizer
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/colduction/randomizer.svg)](https://pkg.go.dev/github.com/colduction/randomizer)
-[![Go Report Card](https://goreportcard.com/badge/github.com/colduction/randomizer)](https://goreportcard.com/report/github.com/colduction/randomizer)
+[![Go Reference](https://pkg.go.dev/badge/github.com/colduction/randomizer-go.svg)](https://pkg.go.dev/github.com/colduction/randomizer-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/colduction/randomizer-go)](https://goreportcard.com/report/github.com/colduction/randomizer-go)
 ![GitHub License](https://img.shields.io/github/license/Colduction/randomizer)
 
 **randomizer** is a fast, zero-allocation-friendly, and goroutine-safe random data generation library for Go.  
@@ -31,7 +31,7 @@ It covers numbers, formatted strings, and network addresses — all driven by a 
 - **Numbers** — random integers (signed & unsigned, any width), and floats in `[0, 1)`
 - **Range sampling** — unbiased interval generation with Lemire's algorithm (no division in the hot path)
 - **Strings** — decimal, hexadecimal, and octal strings with no adjacent-duplicate characters
-- **Network** — random IPv4, IPv6 (unicast & multicast), and MAC addresses
+- **Network** — random IPv4, IPv6 (unicast & multicast), MAC addresses, ports, VLAN IDs, UUIDs, CIDR blocks, and EUI-64 identifiers
 - **Lock-free** — the primary PRNG uses an atomic counter; no mutexes on the hot path
 - **Pool-backed hashing** — `maphash.Hash` objects are recycled via `sync.Pool` for callers that need them
 
@@ -39,14 +39,14 @@ It covers numbers, formatted strings, and network addresses — all driven by a 
 
 ## Requirements
 
-- Go **1.22** or later (uses `for range N` syntax and `b.Loop()` in tests)
+- Go **1.26** or later
 
 ---
 
 ## Installation
 
 ```bash
-go get -u github.com/colduction/randomizer@latest
+go get -u github.com/colduction/randomizer-go
 ```
 
 ---
@@ -58,7 +58,7 @@ package main
 
 import (
     "fmt"
-    "github.com/colduction/randomizer"
+    "github.com/colduction/randomizer-go"
 )
 
 func main() {
@@ -279,6 +279,106 @@ Generates a random IPv6 multicast address (`ff00::/8`) with the given scope nibb
 ```go
 mc := randomizer.Network.IPv6MulticastAddr(randomizer.LinkLocalScope)
 fmt.Println(mc) // e.g. ff02::...
+```
+
+#### `Network.Port(portRange PortRange) uint16`
+
+Returns a random port number within the given range.
+
+| Constant         | Range            | Description                       |
+| ---------------- | ---------------- | --------------------------------- |
+| `AnyPort`        | `[0, 65535]`     | Any valid port                    |
+| `PrivilegedPort` | `[1, 1023]`      | IANA well-known ports             |
+| `RegisteredPort` | `[1024, 49151]`  | IANA registered ports             |
+| `EphemeralPort`  | `[49152, 65535]` | Dynamic/private (ephemeral) ports |
+
+```go
+port := randomizer.Network.Port(randomizer.RegisteredPort)
+fmt.Println(port) // e.g. 8080
+```
+
+#### `Network.VLANID() uint16`
+
+Returns a random 12-bit IEEE 802.1Q VLAN ID in `[0, 4095]`.
+
+```go
+vlan := randomizer.Network.VLANID()
+fmt.Println(vlan) // e.g. 2047
+```
+
+#### `Network.UUIDv4() [16]byte`
+
+Returns a random RFC 4122 version-4 UUID as a `[16]byte` array.
+
+```go
+uuid := randomizer.Network.UUIDv4()
+fmt.Printf("%x\n", uuid[:])
+```
+
+#### `Network.UUIDv4String() string`
+
+Returns a random RFC 4122 version-4 UUID as a 36-character lowercase hex string in the standard `8-4-4-4-12` form. Allocates exactly one buffer.
+
+```go
+s := randomizer.Network.UUIDv4String()
+fmt.Println(s) // e.g. 550e8400-e29b-41d4-a716-446655440000
+```
+
+#### `Network.IPv4CIDR(prefixLen uint8) *net.IPNet`
+
+Returns a random IPv4 network with the given prefix length (clamped to `[0, 32]`).
+
+```go
+net4 := randomizer.Network.IPv4CIDR(24)
+fmt.Println(net4) // e.g. 192.168.5.0/24
+```
+
+#### `Network.IPv6CIDR(prefixLen uint8) *net.IPNet`
+
+Returns a random IPv6 network with the given prefix length (clamped to `[0, 128]`).
+
+```go
+net6 := randomizer.Network.IPv6CIDR(48)
+fmt.Println(net6)
+```
+
+#### `Network.IPv4AddrInCIDR(ipNet *net.IPNet) net.IP`
+
+Returns a random host address within the given IPv4 network. Returns `nil` if `ipNet` is not a valid IPv4 network.
+
+```go
+_, block, _ := net.ParseCIDR("10.0.0.0/8")
+ip := randomizer.Network.IPv4AddrInCIDR(block)
+fmt.Println(ip) // e.g. 10.42.7.93
+```
+
+#### `Network.IPv6AddrInCIDR(ipNet *net.IPNet) net.IP`
+
+Returns a random host address within the given IPv6 network. Returns `nil` if `ipNet` is not a valid IPv6 network.
+
+```go
+_, block, _ := net.ParseCIDR("fd00::/8")
+ip := randomizer.Network.IPv6AddrInCIDR(block)
+fmt.Println(ip)
+```
+
+#### `Network.EUI64() net.HardwareAddr`
+
+Returns a random 8-byte locally-administered unicast EUI-64 identifier.
+
+```go
+eui := randomizer.Network.EUI64()
+fmt.Println(eui) // e.g. 02:1a:3f:7c:d2:88:ab:cd
+```
+
+#### `Network.EUI64FromMAC(mac net.HardwareAddr) net.HardwareAddr`
+
+Derives an EUI-64 identifier from a 6-byte MAC address by inserting `0xFF 0xFE` and flipping the U/L bit (RFC 4291 appendix A). Returns `nil` if `mac` is not exactly 6 bytes.
+
+```go
+mac, _ := net.ParseMAC("02:1a:3f:7c:d2:88")
+eui := randomizer.Network.EUI64FromMAC(mac)
+fmt.Println(eui) // e.g. 00:1a:3f:ff:fe:7c:d2:88
 ```
 
 ---

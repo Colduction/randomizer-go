@@ -4,11 +4,11 @@ import (
 	"hash/maphash"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
-// hashPool pairs a sync.Pool of maphash.Hash objects (for callers that need
-// one via Get/Put) with an atomic SplitMix64 counter used as the package's
-// primary lock-free PRNG.
+// hashPool pairs a sync.Pool of maphash.Hash objects with an atomic SplitMix64
+// counter used as the package's primary lock-free PRNG.
 type hashPool struct {
 	pool  sync.Pool
 	state atomic.Uint64
@@ -16,6 +16,7 @@ type hashPool struct {
 
 const splitMixGamma uint64 = 0x9e3779b97f4a7c15
 
+// splitMix64 returns the SplitMix64 avalanche of x.
 func splitMix64(x uint64) uint64 {
 	z := x
 	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
@@ -23,9 +24,8 @@ func splitMix64(x uint64) uint64 {
 	return z ^ (z >> 31)
 }
 
-// NewHashPool creates a new hashPool. Any positive size enables the pool;
-// zero or negative returns nil. Hash objects are allocated on demand by
-// sync.Pool and recycled automatically by the GC.
+// NewHashPool returns a new hashPool seeded from maphash.
+// Returns nil if size <= 0; sync.Pool manages capacity automatically.
 func NewHashPool(size int) *hashPool {
 	if size <= 0 {
 		return nil
@@ -47,8 +47,7 @@ func NewHashPool(size int) *hashPool {
 	return p
 }
 
-// Get retrieves a maphash.Hash from the pool. The caller must call Put to
-// return it after use.
+// Get retrieves a maphash.Hash from the pool. The caller must call Put to return it after use.
 func (p *hashPool) Get() *maphash.Hash {
 	if p == nil {
 		h := new(maphash.Hash)
@@ -58,7 +57,7 @@ func (p *hashPool) Get() *maphash.Hash {
 	return p.pool.Get().(*maphash.Hash)
 }
 
-// Put returns a maphash.Hash to the pool for reuse.
+// Put returns h to the pool for reuse.
 func (p *hashPool) Put(h *maphash.Hash) {
 	if p == nil || h == nil {
 		return
@@ -67,6 +66,7 @@ func (p *hashPool) Put(h *maphash.Hash) {
 	p.pool.Put(h)
 }
 
+// next64 returns the next random 64-bit value from the pool's SplitMix64 stream.
 func (p *hashPool) next64() uint64 {
 	if p == nil {
 		return splitMix64(maphash.Bytes(maphash.MakeSeed(), nil) + splitMixGamma)
@@ -76,27 +76,20 @@ func (p *hashPool) next64() uint64 {
 
 // Sum appends 8 random bytes to b and returns the extended slice.
 func (p *hashPool) Sum(b []byte) []byte {
-	x := p.next64()
-	return append(b,
-		byte(x>>0),
-		byte(x>>8),
-		byte(x>>16),
-		byte(x>>24),
-		byte(x>>32),
-		byte(x>>40),
-		byte(x>>48),
-		byte(x>>56))
+	var buf [8]byte
+	*(*uint64)(unsafe.Pointer(&buf[0])) = p.next64()
+	return append(b, buf[:]...)
 }
 
-// Sum32 generates a random 32-bit number using the hashPool.
+// Sum32 returns a random 32-bit value.
 func (p *hashPool) Sum32() uint32 {
 	return uint32(p.next64() >> 32)
 }
 
-// Sum64 generates a random 64-bit number using the hashPool.
+// Sum64 returns a random 64-bit value.
 func (p *hashPool) Sum64() uint64 {
 	return p.next64()
 }
 
-// DefaultHashPool is a globally accessible hashPool with a preallocated size.
+// DefaultHashPool is the package-level hashPool used by all top-level functions.
 var DefaultHashPool = NewHashPool(64)
