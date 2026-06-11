@@ -7,7 +7,7 @@ import (
 	"unsafe"
 )
 
-// hashPool pairs a sync.Pool of maphash.Hash objects with an atomic SplitMix64
+// hashPool pairs a [sync.Pool] of [maphash.Hash] objects with an atomic SplitMix64
 // counter used as the package's primary lock-free PRNG.
 type hashPool struct {
 	pool  sync.Pool
@@ -24,8 +24,8 @@ func splitMix64(x uint64) uint64 {
 	return z ^ (z >> 31)
 }
 
-// NewHashPool returns a new hashPool seeded from maphash.
-// Returns nil if size <= 0; sync.Pool manages capacity automatically.
+// NewHashPool returns a new hashPool seeded by [maphash.MakeSeed].
+// It returns nil if size <= 0; [sync.Pool] manages capacity automatically.
 func NewHashPool(size int) *hashPool {
 	if size <= 0 {
 		return nil
@@ -47,7 +47,7 @@ func NewHashPool(size int) *hashPool {
 	return p
 }
 
-// Get retrieves a maphash.Hash from the pool. The caller must call Put to return it after use.
+// Get retrieves a [maphash.Hash] from the pool. The caller must return it with Put.
 func (p *hashPool) Get() *maphash.Hash {
 	if p == nil {
 		h := new(maphash.Hash)
@@ -57,7 +57,7 @@ func (p *hashPool) Get() *maphash.Hash {
 	return p.pool.Get().(*maphash.Hash)
 }
 
-// Put returns h to the pool for reuse.
+// Put resets h and returns the [maphash.Hash] to the pool for reuse.
 func (p *hashPool) Put(h *maphash.Hash) {
 	if p == nil || h == nil {
 		return
@@ -74,22 +74,19 @@ func (p *hashPool) next64() uint64 {
 	return splitMix64(p.state.Add(splitMixGamma))
 }
 
-// Sum appends 8 random bytes to b and returns the extended slice.
+// Sum implements [Provider.Sum].
 func (p *hashPool) Sum(b []byte) []byte {
 	var buf [8]byte
 	*(*uint64)(unsafe.Pointer(&buf[0])) = p.next64()
 	return append(b, buf[:]...)
 }
 
-// Sum32 returns a random 32-bit value.
+// Sum32 implements [Provider.Sum32].
 func (p *hashPool) Sum32() uint32 {
 	return uint32(p.next64() >> 32)
 }
 
-// Sum64 returns a random 64-bit value.
+// Sum64 implements [Provider.Sum64].
 func (p *hashPool) Sum64() uint64 {
 	return p.next64()
 }
-
-// DefaultHashPool is the package-level hashPool used by all top-level functions.
-var DefaultHashPool = NewHashPool(64)
