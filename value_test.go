@@ -49,35 +49,32 @@ func TestNetworkValueASNKinds(t *testing.T) {
 			t.Fatalf("Value(ASNPublic16) = %d is reserved", a)
 		}
 	}
-	// Both halves of the first word are reserved; the second word must be used.
-	previous := randomizer.SetProvider(newSeqProvider(t, 23456<<32, 100))
-	defer randomizer.SetProvider(previous)
-	if got := randomizer.Network.Value(randomizer.ASNPublic); got != 100 {
+	g := randomizer.FromSource(newSeqProvider(t, 23456<<32, 100))
+	if got := g.Network.Value(randomizer.ASNPublic); got != 100 {
 		t.Fatalf("Value(ASNPublic) after rejection = %d, want 100", got)
 	}
 }
 
 func TestNetworkValueFixedProvider(t *testing.T) {
 	const value fixedProvider = 0x0123456789abcdef
-	previous := randomizer.SetProvider(value)
-	defer randomizer.SetProvider(previous)
+	g := randomizer.FromSource(value)
 
-	if got, want := randomizer.Network.Value(randomizer.VLANID), uint64(0x12); got != want {
+	if got, want := g.Network.Value(randomizer.VLANID), uint64(0x12); got != want {
 		t.Fatalf("Value(VLANID) = 0x%x, want 0x%x", got, want)
 	}
-	if got, want := randomizer.Network.Value(randomizer.ASN), uint64(value)>>32; got != want {
+	if got, want := g.Network.Value(randomizer.ASN), uint64(value)>>32; got != want {
 		t.Fatalf("Value(ASN) = 0x%x, want 0x%x", got, want)
 	}
-	if got, want := randomizer.Network.Value(randomizer.VNI), uint64(value)>>40; got != want {
+	if got, want := g.Network.Value(randomizer.VNI), uint64(value)>>40; got != want {
 		t.Fatalf("Value(VNI) = 0x%x, want 0x%x", got, want)
 	}
-	if got, want := randomizer.Network.Value(randomizer.FlowLabel), uint64(value)>>44; got != want {
+	if got, want := g.Network.Value(randomizer.FlowLabel), uint64(value)>>44; got != want {
 		t.Fatalf("Value(FlowLabel) = 0x%x, want 0x%x", got, want)
 	}
-	if got, want := randomizer.Network.Value(randomizer.MPLSLabel), uint64(value)>>44; got != want {
+	if got, want := g.Network.Value(randomizer.MPLSLabel), uint64(value)>>44; got != want {
 		t.Fatalf("Value(MPLSLabel) = 0x%x, want 0x%x", got, want)
 	}
-	if got, want := randomizer.Network.Value(randomizer.IPv6InterfaceID), uint64(value)&^(uint64(0x03)<<56); got != want {
+	if got, want := g.Network.Value(randomizer.IPv6InterfaceID), uint64(value)&^(uint64(0x03)<<56); got != want {
 		t.Fatalf("Value(IPv6InterfaceID) = 0x%x, want 0x%x", got, want)
 	}
 }

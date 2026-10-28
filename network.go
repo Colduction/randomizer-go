@@ -2,14 +2,16 @@ package randomizer
 
 //go:generate go run ./internal/ouigen -o oui_table.go
 
-type network struct{}
+// NetworkGenerator produces network addresses and identifiers using a [Generator]'s source.
+// Its zero value uses the package fast source. Use [New] to create a generator.
+// Concurrent calls must use separate destination buffers.
+type NetworkGenerator struct {
+	provider provider
+}
 
-// Network provides random network addresses, identifiers, and port values
-// using the active [Provider] selected by [SetProvider].
-var Network network
+// Network generates network addresses and identifiers using the package fast source.
+var Network NetworkGenerator
 
-// fixedBytes returns dst resliced to n bytes, or a fresh n-byte slice when dst
-// lacks the capacity.
 func fixedBytes(dst []byte, n int) []byte {
 	if cap(dst) < n {
 		return make([]byte, n)

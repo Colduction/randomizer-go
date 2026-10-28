@@ -11,8 +11,10 @@ type CIDRKind uint8
 const (
 	// IPv4CIDR identifies a random IPv4 network with caller-selected prefix length.
 	IPv4CIDR CIDRKind = iota
+
 	// IPv6CIDR identifies a random IPv6 network with caller-selected prefix length.
 	IPv6CIDR
+
 	// IPv6ULAPrefix identifies an RFC 4193 unique-local IPv6 /48 prefix.
 	IPv6ULAPrefix
 )
@@ -22,8 +24,6 @@ type networkCIDR struct {
 	data  [32]byte
 }
 
-// prefixLen clamps bits to the address length of kind and returns it with
-// the address byte length.
 func prefixLen(kind CIDRKind, bits uint8) (uint8, int) {
 	switch kind {
 	case IPv6CIDR:
@@ -35,21 +35,18 @@ func prefixLen(kind CIDRKind, bits uint8) (uint8, int) {
 	}
 }
 
-// fillPrefix writes a random network address of kind into ip with the host
-// bits below bits cleared. len(ip) must match kind.
-func fillPrefix(ip []byte, kind CIDRKind, bits uint8, p Provider) {
+func fillPrefix(ip []byte, kind CIDRKind, bits uint8, p provider) {
 	if kind == IPv6ULAPrefix {
-		x := p.Sum64()
+		x := p.Uint64()
 		clear(ip)
 		ip[0] = 0xfd
 		ip[1], ip[2], ip[3], ip[4], ip[5] = byte(x), byte(x>>8), byte(x>>16), byte(x>>24), byte(x>>32)
 		return
 	}
-	fillRandomBytes(ip, p)
+	fillRandomBytes(ip[:(int(bits)+7)/8], p)
 	maskHostBits(ip, bits)
 }
 
-// maskHostBits clears every bit of ip after the first bits bits.
 func maskHostBits(ip []byte, bits uint8) {
 	full := int(bits >> 3)
 	if rem := bits & 7; rem != 0 {
@@ -60,6 +57,7 @@ func maskHostBits(ip []byte, bits uint8) {
 }
 
 func fillCIDRMask(mask []byte, bits uint8) {
+	clear(mask)
 	full := int(bits >> 3)
 	for i := range full {
 		mask[i] = 0xff
@@ -71,12 +69,14 @@ func fillCIDRMask(mask []byte, bits uint8) {
 
 // CIDR returns a random network prefix selected by kind.
 // It clamps IPv4 prefix lengths to [0, 32] and IPv6 prefix lengths to [0, 128].
-func (network) CIDR(kind CIDRKind, bits uint8) *net.IPNet {
+func (g NetworkGenerator) CIDR(kind CIDRKind, bits uint8) *net.IPNet {
 	bits, n := prefixLen(kind, bits)
 	buf := new(networkCIDR)
 	ip := buf.data[:n:n]
 	mask := buf.data[n : 2*n : 2*n]
-	fillPrefix(ip, kind, bits, currentProvider())
+	s := openProvider(g.provider)
+	defer s.close()
+	fillPrefix(ip, kind, bits, s.provider)
 	fillCIDRMask(mask, bits)
 	buf.ipNet.IP = net.IP(ip)
 	buf.ipNet.Mask = net.IPMask(mask)
@@ -84,44 +84,81 @@ func (network) CIDR(kind CIDRKind, bits uint8) *net.IPNet {
 }
 
 // IPInCIDR writes a random host address inside ipNet into dst and returns it.
-// It returns nil when ipNet is nil or not a valid IPv4 or IPv6 network.
-func (network) IPInCIDR(dst []byte, ipNet *net.IPNet) net.IP {
+// A nil network, invalid address, or noncontiguous mask returns nil without changing the destination.
+// Source address and mask storage may overlap the destination. IPv4-mapped
+// source addresses produce 4-byte IPv4 results. Network and broadcast addresses
+// remain eligible; every address in the prefix is equally likely.
+func (g NetworkGenerator) IPInCIDR(dst []byte, ipNet *net.IPNet) net.IP {
+	if g.provider == nil {
+		return randomIPInCIDR(dst, ipNet, fastProvider{})
+	}
+	s := openProvider(g.provider)
+	defer s.close()
+	return randomIPInCIDR(dst, ipNet, s.provider)
+}
+
+func randomIPInCIDR(dst []byte, ipNet *net.IPNet, p provider) net.IP {
 	if ipNet == nil {
 		return nil
 	}
-	p := currentProvider()
 	mask := ipNet.Mask
+	var hiMask, loMask uint64
 	switch len(mask) {
 	case net.IPv4len:
-		ip4 := ipNet.IP.To4()
-		if ip4 == nil {
+		loMask = uint64(binary.BigEndian.Uint32(mask))
+		inverted := ^uint32(loMask)
+		if inverted&(inverted+1) != 0 {
 			return nil
 		}
-		b := fixedBytes(dst, net.IPv4len)
-		putIPv4(b, hostBits32(binary.BigEndian.Uint32(ip4), binary.BigEndian.Uint32(mask), uint32(p.Sum64())))
-		return net.IP(b)
 	case net.IPv6len:
-		ip6 := ipNet.IP.To16()
-		if ip6 == nil {
+		hiMask, loMask = binary.BigEndian.Uint64(mask), binary.BigEndian.Uint64(mask[8:])
+		inverted := ^loMask
+		if hiMask != ^uint64(0) {
+			if loMask != 0 {
+				return nil
+			}
+			inverted = ^hiMask
+		}
+		if inverted&(inverted+1) != 0 {
 			return nil
 		}
-		b := fixedBytes(dst, net.IPv6len)
-		binary.BigEndian.PutUint64(b, hostBits64(binary.BigEndian.Uint64(ip6), binary.BigEndian.Uint64(mask), p.Sum64()))
-		binary.BigEndian.PutUint64(b[8:], hostBits64(binary.BigEndian.Uint64(ip6[8:]), binary.BigEndian.Uint64(mask[8:]), p.Sum64()))
-		return net.IP(b)
 	default:
 		return nil
 	}
+	if ip4 := ipNet.IP.To4(); ip4 != nil {
+		base, maskBits := binary.BigEndian.Uint32(ip4), uint32(loMask)
+		var random uint32
+		if maskBits != ^uint32(0) {
+			random = uint32(p.Uint64())
+		}
+		b := fixedBytes(dst, net.IPv4len)
+		putIPv4(b, hostBits32(base, maskBits, random))
+		return net.IP(b)
+	}
+	ip6 := ipNet.IP.To16()
+	if ip6 == nil || len(mask) != net.IPv6len {
+		return nil
+	}
+	hi, lo := binary.BigEndian.Uint64(ip6), binary.BigEndian.Uint64(ip6[8:])
+	var randomHi, randomLo uint64
+	if hiMask != ^uint64(0) || loMask != ^uint64(0) {
+		if hiMask != ^uint64(0) {
+			randomHi = p.Uint64()
+		}
+		if loMask != ^uint64(0) {
+			randomLo = p.Uint64()
+		}
+	}
+	b := fixedBytes(dst, net.IPv6len)
+	binary.BigEndian.PutUint64(b, hostBits64(hi, hiMask, randomHi))
+	binary.BigEndian.PutUint64(b[8:], hostBits64(lo, loMask, randomLo))
+	return net.IP(b)
 }
 
-// hostBits32 keeps the masked network bits of base and takes the host bits
-// from x.
 func hostBits32(base, mask, x uint32) uint32 {
 	return base&mask | x&^mask
 }
 
-// hostBits64 keeps the masked network bits of base and takes the host bits
-// from x.
 func hostBits64(base, mask, x uint64) uint64 {
 	return base&mask | x&^mask
 }

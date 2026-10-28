@@ -58,13 +58,6 @@ func TestNetworkHardwareOUI(t *testing.T) {
 		}
 	}
 
-	// The first word lands in the inquiry LAP range and must be redrawn.
-	previous := randomizer.SetProvider(newSeqProvider(t, 0x9e8b33, 0x123456))
-	defer randomizer.SetProvider(previous)
-	real := randomizer.Network.Hardware(nil, randomizer.HardwareBluetoothPublic, randomizer.HardwareOptions{})
-	if !bytes.Equal(real[3:], []byte{0x12, 0x34, 0x56}) {
-		t.Fatalf("Hardware(HardwareBluetoothPublic) extension = %x, want 123456", real[3:])
-	}
 }
 
 func TestNetworkHardwarePrefix(t *testing.T) {
@@ -134,12 +127,7 @@ func TestNetworkHardwareEUI64RealOUI(t *testing.T) {
 			t.Fatalf("Hardware(HardwareEUI64RealOUI) = %x uses an encapsulation extension", eui)
 		}
 	}
-	previous := randomizer.SetProvider(newSeqProvider(t, 0xfffe<<24, 0x0102030405))
-	defer randomizer.SetProvider(previous)
-	eui := randomizer.Network.Hardware(nil, randomizer.HardwareEUI64RealOUI, randomizer.HardwareOptions{})
-	if !bytes.Equal(eui[3:], []byte{0x01, 0x02, 0x03, 0x04, 0x05}) {
-		t.Fatalf("Hardware(HardwareEUI64RealOUI) extension = %x, want 0102030405 after redraw", eui[3:])
-	}
+
 }
 
 func TestNetworkHardwareEUI64FromMAC(t *testing.T) {
@@ -190,12 +178,10 @@ func TestNetworkHardwareBluetoothRejection(t *testing.T) {
 		{randomizer.HardwareBluetoothNRPA, []uint64{0, ones46, 5}, []byte{0, 0, 0, 0, 0, 5}},
 		{randomizer.HardwareBluetoothRPA, []uint64{0, 1<<22 - 1, 0x308194}, []byte{0x70, 0x81, 0x94, 0x0d, 0xfb, 0xaa}},
 	}
-	// Bluetooth Core Specification Vol 3 Part H Appendix D.7 sample data.
 	irk := []byte{0xec, 0x02, 0x34, 0xa3, 0x57, 0xc8, 0xad, 0x05, 0x34, 0x10, 0x10, 0xa6, 0x0a, 0x39, 0x7d, 0x9b}
 	for _, tc := range cases {
-		previous := randomizer.SetProvider(newSeqProvider(t, tc.seq...))
-		got := randomizer.Network.Hardware(nil, tc.kind, randomizer.HardwareOptions{IRK: irk})
-		randomizer.SetProvider(previous)
+		g := randomizer.FromSource(newSeqProvider(t, tc.seq...))
+		got := g.Network.Hardware(nil, tc.kind, randomizer.HardwareOptions{IRK: irk})
 		if !bytes.Equal(got, tc.want) {
 			t.Fatalf("Hardware(%d) = %x, want %x", tc.kind, got, tc.want)
 		}

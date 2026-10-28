@@ -6,51 +6,73 @@ type ValueKind uint8
 const (
 	// AnyPort identifies the full port value range [0, 65535].
 	AnyPort ValueKind = iota
+
 	// PrivilegedPort identifies the IANA well-known port range [1, 1023].
 	PrivilegedPort
+
 	// RegisteredPort identifies the IANA registered port range [1024, 49151].
 	RegisteredPort
+
 	// EphemeralPort identifies the dynamic and private port range [49152, 65535].
 	EphemeralPort
+
 	// VLANID identifies a 12-bit IEEE 802.1Q VLAN ID in [0, 4095].
 	VLANID
+
 	// ASN identifies a 32-bit Autonomous System Number in [0, 4294967295].
 	ASN
+
 	// VNI identifies a 24-bit VXLAN Network Identifier in [0, 16777215].
 	VNI
+
 	// FlowLabel identifies a 20-bit IPv6 flow label in [0, 1048575].
 	FlowLabel
+
 	// MPLSLabel identifies a 20-bit MPLS label in [0, 1048575].
 	MPLSLabel
+
 	// IPv6InterfaceID identifies a 64-bit IPv6 interface identifier with U/L and I/G bits clear.
 	IPv6InterfaceID
+
 	// VLANIDUnreserved identifies an assignable IEEE 802.1Q VLAN ID in
 	// [1, 4094]; 0 marks priority-tagged frames and 4095 is reserved.
 	VLANIDUnreserved
+
 	// MPLSLabelUnreserved identifies an MPLS label in [16, 1048575], outside
 	// the RFC 7274 special-purpose labels 0-15.
 	MPLSLabelUnreserved
+
 	// ASNPublic identifies a 32-bit Autonomous System Number that IANA can
 	// assign: it excludes 0 (RFC 7607), 23456 (AS_TRANS, RFC 6793),
 	// 64496-131071 (RFC 5398 documentation, RFC 6996 private, RFC 7300 last
 	// 16-bit, and IANA reserved), and 4200000000-4294967295 (RFC 6996
 	// private and RFC 7300 last 32-bit).
 	ASNPublic
+
 	// ASNPublic16 identifies an assignable 16-bit Autonomous System Number in
 	// [1, 64495] other than 23456.
 	ASNPublic16
+
 	// ASNPrivate16 identifies an RFC 6996 private 16-bit Autonomous System
 	// Number in [64512, 65534].
 	ASNPrivate16
+
 	// ASNPrivate32 identifies an RFC 6996 private 32-bit Autonomous System
 	// Number in [4200000000, 4294967294].
 	ASNPrivate32
 )
 
 // Value returns a random integer selected by kind. Unknown kinds produce [AnyPort].
-func (network) Value(kind ValueKind) uint64 {
-	p := currentProvider()
-	x := p.Sum64()
+func (g NetworkGenerator) Value(kind ValueKind) uint64 {
+	if g.provider == nil {
+		return networkValue(kind, fastProvider{}.Uint64(), fastProvider{})
+	}
+	s := openProvider(g.provider)
+	defer s.close()
+	return networkValue(kind, s.Uint64(), s.provider)
+}
+
+func networkValue(kind ValueKind, x uint64, p provider) uint64 {
 	switch kind {
 	case PrivilegedPort:
 		return boundedFrom(x, 1023, p) + 1
@@ -80,7 +102,7 @@ func (network) Value(kind ValueKind) uint64 {
 			if a := uint32(x >> 32); isPublicASN(a) {
 				return uint64(a)
 			}
-			x = p.Sum64()
+			x = p.Uint64()
 		}
 	case ASNPublic16:
 		v := boundedFrom(x, 64494, p) + 1
@@ -97,8 +119,6 @@ func (network) Value(kind ValueKind) uint64 {
 	}
 }
 
-// isPublicASN reports whether a is an Autonomous System Number outside every
-// IANA reserved, private, and documentation range.
 func isPublicASN(a uint32) bool {
 	switch {
 	case a == 0, a == 23456:

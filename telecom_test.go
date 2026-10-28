@@ -9,8 +9,6 @@ import (
 
 var benchTelecom []byte
 
-// luhnValid reports whether the digit string s has a correct trailing Luhn
-// check digit, computed independently of the package.
 func luhnValid(s string) bool {
 	sum := 0
 	double := false
@@ -38,7 +36,6 @@ func allDigits(s string) bool {
 }
 
 func TestTelecomLuhnVector(t *testing.T) {
-	// GSMA sample IMEI 49-015420-323751 carries check digit 8.
 	got := randomizer.Telecom.String(randomizer.IMEI, randomizer.TelecomOptions{TAC: "49015420"})
 	if len(got) != 15 || !strings.HasPrefix(got, "49015420") || !luhnValid(got) {
 		t.Fatalf("IMEI with TAC = %q, want 15 Luhn-valid digits", got)

@@ -85,7 +85,6 @@ func TestNetworkAddrIn(t *testing.T) {
 			}
 		}
 	}
-	// Host bits set in the prefix address must not bias the result.
 	for _, s := range []string{"10.1.2.3/24", "2001:db8::1/64"} {
 		prefix := netip.MustParsePrefix(s)
 		var set, clear bool

@@ -81,7 +81,6 @@ func TestNetworkIPInCIDR(t *testing.T) {
 }
 
 func TestNetworkIPInCIDRUnmaskedBase(t *testing.T) {
-	// Host bits set in the base address must not bias the result.
 	cases := []*net.IPNet{
 		{IP: net.IPv4(10, 1, 2, 3).To4(), Mask: net.CIDRMask(24, 32)},
 		{IP: net.ParseIP("2001:db8::1"), Mask: net.CIDRMask(64, 128)},
@@ -117,5 +116,18 @@ func BenchmarkNetworkIPInCIDR6(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		benchIP = randomizer.Network.IPInCIDR(benchBuffer[:0], ipNet)
+	}
+}
+
+func TestNetworkIPInCIDRMappedIPv4(t *testing.T) {
+	g := randomizer.FromSource(fixedProvider(0x0123456789abcdef))
+	for _, address := range []net.IP{net.IP{10, 1, 2, 3}, net.ParseIP("::ffff:10.1.2.3")} {
+		for _, mask := range []net.IPMask{net.CIDRMask(0, 32), net.CIDRMask(24, 32), net.CIDRMask(0, 128), net.CIDRMask(80, 128), net.CIDRMask(120, 128), net.CIDRMask(128, 128)} {
+			network := &net.IPNet{IP: address, Mask: mask}
+			got := g.Network.IPInCIDR(nil, network)
+			if len(got) != net.IPv4len || !network.Contains(got) {
+				t.Fatalf("IPInCIDR(%v) = %v, want 4-byte IPv4 inside network", network, got)
+			}
+		}
 	}
 }

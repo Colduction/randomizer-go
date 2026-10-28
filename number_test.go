@@ -1,6 +1,7 @@
 package randomizer_test
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/colduction/randomizer-go"
@@ -127,28 +128,6 @@ func BenchmarkNumberUintParallel(b *testing.B) {
 		for pb.Next() {
 			sink += randomizer.Uint[uint64]()
 		}
-		benchUint64 = sink
-	})
-}
-
-func BenchmarkNumberUintHashPool(b *testing.B) {
-	previous := randomizer.SetProvider(randomizer.NewHashPool(64))
-	defer randomizer.SetProvider(previous)
-	b.ReportAllocs()
-	for b.Loop() {
-		benchUint64 = randomizer.Uint[uint64]()
-	}
-}
-
-func BenchmarkNumberUintHashPoolParallel(b *testing.B) {
-	previous := randomizer.SetProvider(randomizer.NewHashPool(64))
-	defer randomizer.SetProvider(previous)
-	b.ReportAllocs()
-	b.RunParallel(func(pb *testing.PB) {
-		var sink uint64
-		for pb.Next() {
-			sink += randomizer.Uint[uint64]()
-		}
-		benchUint64 = sink
+		runtime.KeepAlive(sink)
 	})
 }

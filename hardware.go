@@ -16,54 +16,68 @@ const (
 	// HardwareMAC identifies a random 6-byte MAC address whose U/L and I/G
 	// bits follow [HardwareOptions].
 	HardwareMAC HardwareKind = iota
+
 	// HardwareMACOUI identifies a random MAC address with caller-supplied OUI bytes.
 	HardwareMACOUI
+
 	// HardwareMACRealOUI identifies a random universal unicast MAC address
 	// with a built-in IEEE-registered OUI. The 24-bit extension avoids the
 	// Bluetooth inquiry LAP range 0x9e8b00-0x9e8b3f, so the result is also a
 	// valid Bluetooth public device address.
 	HardwareMACRealOUI
+
 	// HardwareEUI64 identifies a random locally-administered unicast EUI-64 identifier.
 	HardwareEUI64
+
 	// HardwareEUI64FromMAC identifies the IEEE EUI-64 encapsulation of a
 	// 6-byte MAC address: the OUI, 0xff 0xfe, then the extension. The U/L
 	// bit is kept; see [HardwareModifiedEUI64FromMAC] for the IPv6 form.
 	HardwareEUI64FromMAC
+
 	// HardwareMACPrefix identifies a random MAC address that starts with
 	// [HardwareOptions.PrefixBits] bits of [HardwareOptions.Prefix], covering
 	// IEEE MA-L (24-bit), MA-M (28-bit), and MA-S (36-bit) assignments.
 	HardwareMACPrefix
+
 	// HardwareMACAAI identifies an IEEE 802c Administratively Assigned
 	// Identifier: a local unicast MAC address in SLAP quadrant 00 (second
 	// hexadecimal digit 2).
 	HardwareMACAAI
+
 	// HardwareMACELI identifies an IEEE 802c Extended Local Identifier: a
 	// local unicast MAC address in SLAP quadrant 01 formed from the 24-bit
 	// Company ID in [HardwareOptions.CID] (second hexadecimal digit A).
 	HardwareMACELI
+
 	// HardwareMACSAI identifies an IEEE 802c Standard Assigned Identifier: a
 	// local unicast MAC address in SLAP quadrant 11 (second hexadecimal digit E).
 	HardwareMACSAI
+
 	// HardwareEUI64RealOUI identifies a random universal EUI-64 identifier with
 	// a built-in IEEE-registered OUI and a 40-bit extension outside the
 	// 0xfffe/0xffff encapsulation values.
 	HardwareEUI64RealOUI
+
 	// HardwareModifiedEUI64FromMAC identifies the RFC 4291 modified EUI-64 of
 	// a 6-byte MAC address, the IPv6 interface identifier form with the U/L
 	// bit inverted.
 	HardwareModifiedEUI64FromMAC
+
 	// HardwareBluetoothStatic identifies a Bluetooth static random device
 	// address: the two most significant bits are 11 and the 46 random bits
 	// are neither all zero nor all one.
 	HardwareBluetoothStatic
+
 	// HardwareBluetoothNRPA identifies a Bluetooth non-resolvable private
 	// address: the two most significant bits are 00 and the 46 random bits
 	// are neither all zero nor all one.
 	HardwareBluetoothNRPA
+
 	// HardwareBluetoothRPA identifies a Bluetooth resolvable private address:
 	// a 24-bit prand with top bits 01 followed by hash = ah(IRK, prand) when
 	// [HardwareOptions.IRK] is set, or a random hash otherwise.
 	HardwareBluetoothRPA
+
 	// HardwareBluetoothPublic identifies a Bluetooth public device address,
 	// which is the same as [HardwareMACRealOUI].
 	HardwareBluetoothPublic HardwareKind = HardwareMACRealOUI
@@ -71,45 +85,38 @@ const (
 
 // HardwareOptions configures link-layer address generation through [Network].
 type HardwareOptions struct {
-	// OUI supplies the prefix for [HardwareMACOUI].
-	OUI [3]byte
-	// CID supplies the IEEE Company ID for [HardwareMACELI]; its first byte
-	// must have the form xA.
-	CID [3]byte
-	// PrefixBits is the number of leading bits, 1 to 48, taken from Prefix
-	// for [HardwareMACPrefix].
-	PrefixBits uint8
-	// Local controls the U/L bit for [HardwareMAC].
-	Local bool
-	// Multicast controls the I/G bit for [HardwareMAC].
-	Multicast bool
 	// MAC supplies source bytes for [HardwareEUI64FromMAC] and
 	// [HardwareModifiedEUI64FromMAC].
 	MAC net.HardwareAddr
+
 	// Prefix supplies the leading bits for [HardwareMACPrefix].
 	Prefix []byte
+
 	// IRK is the 16-byte Identity Resolving Key hashed into a
 	// [HardwareBluetoothRPA]; nil selects a random hash.
 	IRK []byte
+
+	// OUI supplies the prefix for [HardwareMACOUI].
+	OUI [3]byte
+
+	// CID supplies the IEEE Company ID for [HardwareMACELI]; its first byte
+	// must have the form xA.
+	CID [3]byte
+
+	// PrefixBits is the number of leading bits, 1 to 48, taken from [HardwareOptions.Prefix]
+	// for [HardwareMACPrefix].
+	PrefixBits uint8
+
+	// Local controls the U/L bit for [HardwareMAC].
+	Local bool
+
+	// Multicast controls the I/G bit for [HardwareMAC].
+	Multicast bool
 }
 
-// realOUI selects a built-in OUI from the high 32 bits of x, leaving the low
-// bits independent for the extension. The array length is a constant, so the
-// modulus compiles to a multiply and shift.
-func realOUI(x uint64) [3]byte {
-	return realOUIs[(x>>32)%uint64(len(realOUIs))]
-}
-
-// bluetoothInquiryLAP reports whether the 24-bit extension lap falls in the
-// reserved inquiry access code range 0x9e8b00-0x9e8b3f.
-func bluetoothInquiryLAP(lap uint32) bool {
-	return lap>>6 == 0x9e8b00>>6
-}
-
-// random46 returns 46 random bits that are neither all zero nor all one.
-func random46(p Provider) uint64 {
+func random46(p provider) uint64 {
 	for {
-		r := p.Sum64() & (1<<46 - 1)
+		r := p.Uint64() & (1<<46 - 1)
 		if r != 0 && r != 1<<46-1 {
 			return r
 		}
@@ -118,24 +125,38 @@ func random46(p Provider) uint64 {
 
 // Hardware writes a link-layer address selected by kind into dst and returns it.
 // It returns nil for [HardwareEUI64FromMAC] and [HardwareModifiedEUI64FromMAC]
-// when options.MAC is not 6 bytes, for [HardwareMACPrefix] when the prefix is
-// invalid, for [HardwareMACELI] when options.CID is not a Company ID, and for
-// [HardwareBluetoothRPA] when options.IRK is neither nil nor 16 bytes.
-func (network) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) net.HardwareAddr {
-	p := currentProvider()
+// when [HardwareOptions.MAC] is not 6 bytes, for [HardwareMACPrefix] when the prefix is
+// invalid, for [HardwareMACELI] when [HardwareOptions.CID] is not a Company ID, and for
+// [HardwareBluetoothRPA] when [HardwareOptions.IRK] is neither nil nor 16 bytes.
+// Source slices may overlap the destination. Invalid input leaves it unchanged.
+func (g NetworkGenerator) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) net.HardwareAddr {
+	if g.provider == nil {
+		return randomHardware(dst, kind, &options, fastProvider{})
+	}
+	return g.hardware(dst, kind, &options)
+}
+
+func (g NetworkGenerator) hardware(dst []byte, kind HardwareKind, options *HardwareOptions) net.HardwareAddr {
+	s := openProvider(g.provider)
+	defer s.close()
+	return randomHardware(dst, kind, options, s.provider)
+}
+
+func randomHardware(dst []byte, kind HardwareKind, options *HardwareOptions, p provider) net.HardwareAddr {
 	switch kind {
 	case HardwareMACOUI:
-		x := uint32(p.Sum64())
+		x := uint32(p.Uint64())
 		b := fixedBytes(dst, 6)
 		b[0], b[1], b[2] = options.OUI[0], options.OUI[1], options.OUI[2]
 		b[3], b[4], b[5] = byte(x), byte(x>>8), byte(x>>16)
 		return net.HardwareAddr(b)
 	case HardwareMACRealOUI:
-		x := p.Sum64()
-		oui := realOUI(x)
-		lap := uint32(x) & 0xffffff
-		for bluetoothInquiryLAP(lap) {
-			lap = uint32(p.Sum64()) & 0xffffff
+		const extensions = 1<<24 - 64
+		x := boundedFrom(p.Uint64(), uint64(len(realOUIs))*extensions, p)
+		oui := realOUIs[x/extensions]
+		lap := uint32(x % extensions)
+		if lap >= 0x9e8b00 {
+			lap += 64
 		}
 		b := fixedBytes(dst, 6)
 		b[0], b[1], b[2] = oui[0], oui[1], oui[2]
@@ -143,21 +164,23 @@ func (network) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) 
 		return net.HardwareAddr(b)
 	case HardwareMACPrefix:
 		bits := int(options.PrefixBits)
-		if bits < 1 || bits > 48 || len(options.Prefix)*8 < bits {
+		if bits < 1 || bits > 48 || len(options.Prefix) < (bits+7)/8 {
 			return nil
 		}
+		var prefix [6]byte
+		copy(prefix[:], options.Prefix)
 		b := fixedBytes(dst, 6)
-		fillRandomBytes(b, p)
 		full := bits >> 3
-		copy(b, options.Prefix[:full])
+		copy(b[:full], prefix[:full])
+		fillRandomBytes(b[full:], p)
 		if rem := bits & 7; rem != 0 {
 			mask := byte(0xff) << (8 - rem)
-			b[full] = options.Prefix[full]&mask | b[full]&^mask
+			b[full] = prefix[full]&mask | b[full]&^mask
 		}
 		return net.HardwareAddr(b)
 	case HardwareMACAAI, HardwareMACSAI:
 		b := fixedBytes(dst, 6)
-		putUint48(b, p.Sum64())
+		putUint48(b, p.Uint64())
 		b[0] = b[0]&0xf0 | 0x02
 		if kind == HardwareMACSAI {
 			b[0] |= 0x0c
@@ -167,26 +190,25 @@ func (network) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) 
 		if options.CID[0]&0x0f != 0x0a {
 			return nil
 		}
-		x := uint32(p.Sum64())
+		x := uint32(p.Uint64())
 		b := fixedBytes(dst, 6)
 		b[0], b[1], b[2] = options.CID[0], options.CID[1], options.CID[2]
 		b[3], b[4], b[5] = byte(x), byte(x>>8), byte(x>>16)
 		return net.HardwareAddr(b)
 	case HardwareEUI64:
 		b := fixedBytes(dst, 8)
-		binary.BigEndian.PutUint64(b, p.Sum64())
+		binary.BigEndian.PutUint64(b, p.Uint64())
 		b[0] = b[0]&^0x01 | 0x02
 		return net.HardwareAddr(b)
 	case HardwareEUI64RealOUI:
-		x := p.Sum64()
-		oui := realOUI(x)
-		for uint16(x>>24) >= 0xfffe {
-			x = p.Sum64()
-		}
+		const extensions = 1<<40 - 2<<24
+		x := boundedFrom(p.Uint64(), uint64(len(realOUIs))*extensions, p)
+		oui := realOUIs[x/extensions]
+		extension := x % extensions
 		b := fixedBytes(dst, 8)
 		b[0], b[1], b[2] = oui[0], oui[1], oui[2]
-		b[3], b[4] = byte(x>>32), byte(x>>24)
-		b[5], b[6], b[7] = byte(x>>16), byte(x>>8), byte(x)
+		b[3], b[4] = byte(extension>>32), byte(extension>>24)
+		b[5], b[6], b[7] = byte(extension>>16), byte(extension>>8), byte(extension)
 		return net.HardwareAddr(b)
 	case HardwareEUI64FromMAC, HardwareModifiedEUI64FromMAC:
 		mac := options.MAC
@@ -211,10 +233,10 @@ func (network) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) 
 		if options.IRK != nil && len(options.IRK) != 16 {
 			return nil
 		}
-		x := p.Sum64()
+		x := p.Uint64()
 		prand := uint32(x) & (1<<22 - 1)
 		for prand == 0 || prand == 1<<22-1 {
-			x = p.Sum64()
+			x = p.Uint64()
 			prand = uint32(x) & (1<<22 - 1)
 		}
 		prand |= 1 << 22
@@ -229,7 +251,7 @@ func (network) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) 
 		return net.HardwareAddr(b)
 	default:
 		b := fixedBytes(dst, 6)
-		putUint48(b, p.Sum64())
+		putUint48(b, p.Uint64())
 		b[0] &^= 0x03
 		if options.Local {
 			b[0] |= 0x02
@@ -241,17 +263,14 @@ func (network) Hardware(dst []byte, kind HardwareKind, options HardwareOptions) 
 	}
 }
 
-// putUint48 writes the low 48 bits of x into b[:6], big-endian.
 func putUint48(b []byte, x uint64) {
 	b[0], b[1], b[2] = byte(x>>40), byte(x>>32), byte(x>>24)
 	b[3], b[4], b[5] = byte(x>>16), byte(x>>8), byte(x)
 }
 
-// rpaCipher caches the AES block for the most recently used IRK so repeated
-// resolvable private addresses for one key allocate nothing.
 type rpaCipher struct {
-	irk   [16]byte
 	block cipher.Block
+	irk   [16]byte
 }
 
 var (
@@ -259,9 +278,6 @@ var (
 	rpaScratch = sync.Pool{New: func() any { return new([32]byte) }}
 )
 
-// bluetoothHash returns ah(irk, prand) from Bluetooth Core Specification
-// Vol 3 Part H 2.2.2: the low 24 bits of AES-128 over prand padded with 104
-// zero bits. irk must be 16 bytes.
 func bluetoothHash(irk []byte, prand uint32) uint32 {
 	key := [16]byte(irk)
 	c := rpaCache.Load()

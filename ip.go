@@ -11,63 +11,85 @@ type IPKind uint8
 const (
 	// IPv4Any identifies a fully random 4-byte IPv4 address.
 	IPv4Any IPKind = iota
+
 	// IPv4Private identifies an RFC 1918 private IPv4 address; each of the
 	// three blocks is equally likely.
 	IPv4Private
+
 	// IPv4LinkLocal identifies an RFC 3927 link-local IPv4 address in
 	// 169.254.1.0-169.254.254.255, the range hosts may self-assign.
 	IPv4LinkLocal
+
 	// IPv4Multicast identifies an RFC 5771 multicast IPv4 address in 224.0.0.0/4.
 	IPv4Multicast
-	// IPv4Public identifies a globally-routable IPv4 address outside IANA special-purpose ranges.
+
+	// IPv4Public identifies an IPv4 address outside IANA special-purpose and multicast ranges.
+	// It does not guarantee that the address is assigned or routable.
 	IPv4Public
+
 	// IPv6Any identifies a fully random 16-byte IPv6 address.
 	IPv6Any
+
 	// IPv6Global identifies a global IPv6 unicast address in 2000::/3.
 	IPv6Global
+
 	// IPv6LinkLocal identifies an RFC 4291 link-local IPv6 unicast address in
 	// fe80::/64 with a random interface identifier.
 	IPv6LinkLocal
+
 	// IPv6SiteLocal identifies a site-local IPv6 unicast address in fec0::/10.
 	// Site-local addresses are deprecated by RFC 3879.
 	IPv6SiteLocal
+
 	// IPv6UniqueLocal identifies a unique-local IPv6 unicast address in fd00::/8.
 	IPv6UniqueLocal
+
 	// IPv6Private identifies a unique-local IPv6 unicast address in fd00::/8.
 	IPv6Private IPKind = IPv6UniqueLocal
+
 	// IPv6InterfaceLocalMulticast identifies an IPv6 transient multicast address with scope 0x1.
 	IPv6InterfaceLocalMulticast IPKind = iota
+
 	// IPv6LinkLocalMulticast identifies an IPv6 transient multicast address with scope 0x2.
 	IPv6LinkLocalMulticast
+
 	// IPv6AdminLocalMulticast identifies an IPv6 transient multicast address with scope 0x4.
 	IPv6AdminLocalMulticast
+
 	// IPv6SiteLocalMulticast identifies an IPv6 transient multicast address with scope 0x5.
 	IPv6SiteLocalMulticast
+
 	// IPv6OrgLocalMulticast identifies an IPv6 transient multicast address with scope 0x8.
 	IPv6OrgLocalMulticast
+
 	// IPv6GlobalMulticast identifies an IPv6 transient multicast address with scope 0xe.
 	IPv6GlobalMulticast
+
 	// IPv4Loopback identifies an RFC 1122 loopback IPv4 address in 127.0.0.0/8,
 	// excluding 127.0.0.0 and 127.255.255.255.
 	IPv4Loopback
+
 	// IPv4CGNAT identifies an RFC 6598 shared address in 100.64.0.0/10.
 	IPv4CGNAT
+
 	// IPv4Documentation identifies an RFC 5737 address in 192.0.2.0/24,
 	// 198.51.100.0/24, or 203.0.113.0/24; each block is equally likely.
 	IPv4Documentation
+
 	// IPv6Documentation identifies an RFC 3849 address in 2001:db8::/32.
 	IPv6Documentation
+
 	// IPv6Public identifies a global unicast address in 2000::/3 outside every
 	// IANA special-purpose block (2001::/23, 2001:db8::/32, 2002::/16,
 	// 2620:4f:8000::/48, 3fff::/20, 5f00::/16) whose interface identifier is
 	// neither the subnet-router anycast nor an RFC 2526 reserved anycast.
 	IPv6Public
+
 	// IPv6RealmLocalMulticast identifies an IPv6 transient multicast address
 	// with RFC 7346 scope 0x3.
 	IPv6RealmLocalMulticast
 )
 
-// ipKindLen holds the byte length of every [IPKind]; unknown kinds are IPv4.
 var ipKindLen = [...]uint8{
 	IPv4Any: 4, IPv4Private: 4, IPv4LinkLocal: 4, IPv4Multicast: 4, IPv4Public: 4,
 	IPv6Any: 16, IPv6Global: 16, IPv6LinkLocal: 16, IPv6SiteLocal: 16, IPv6UniqueLocal: 16,
@@ -91,60 +113,65 @@ func putIPv4(b []byte, x uint32) {
 // IP writes a random address selected by kind into dst and returns it.
 // It allocates only when dst capacity is too small for the selected address.
 // Unknown kinds produce [IPv4Any].
-func (network) IP(dst []byte, kind IPKind) net.IP {
+func (g NetworkGenerator) IP(dst []byte, kind IPKind) net.IP {
 	b := fixedBytes(dst, ipLen(kind))
-	fillIP(b, kind, currentProvider())
+	if g.provider == nil {
+		fillIP(b, kind, fastProvider{})
+	} else {
+		g.fillIP(b, kind)
+	}
 	return net.IP(b)
 }
 
-// fillIP writes an address of kind into b, whose length is ipLen(kind). It
-// draws only through [Provider.Sum64] and [fillRandomBytes], never handing b
-// to an interface method, so b may live on the caller's stack.
-func fillIP(b []byte, kind IPKind, p Provider) {
+func (g NetworkGenerator) fillIP(dst []byte, kind IPKind) {
+	s := openProvider(g.provider)
+	defer s.close()
+	fillIP(dst, kind, s.provider)
+}
+
+func fillIP(b []byte, kind IPKind, p provider) {
 	switch kind {
 	case IPv4Private:
-		x := p.Sum64()
-		// The block index comes from the high 32 bits, the octets from the low.
-		switch (uint64(uint32(x>>32)) * 3) >> 32 {
+		x := boundedFrom(p.Uint64(), 3<<24, p)
+		switch x >> 24 {
 		case 0:
-			b[0], b[1] = 10, byte(x>>8)
+			b[0], b[1] = 10, byte(x>>16)
 		case 1:
-			b[0], b[1] = 172, 16+(byte(x>>8)&0x0f)
+			b[0], b[1] = 172, 16+(byte(x>>16)&0x0f)
 		default:
 			b[0], b[1] = 192, 168
 		}
-		b[2], b[3] = byte(x>>16), byte(x>>24)
+		b[2], b[3] = byte(x>>8), byte(x)
 	case IPv4LinkLocal:
-		x := p.Sum64()
+		x := p.Uint64()
 		for byte(x) == 0 || byte(x) == 255 {
-			x = p.Sum64()
+			x = p.Uint64()
 		}
 		b[0], b[1], b[2], b[3] = 169, 254, byte(x), byte(x>>8)
 	case IPv4Multicast:
-		x := uint32(p.Sum64())
+		x := uint32(p.Uint64())
 		b[0] = 0xe0 | (byte(x) & 0x0f)
 		b[1], b[2], b[3] = byte(x>>8), byte(x>>16), byte(x>>24)
 	case IPv4Public:
-		x := p.Sum64()
+		x := p.Uint64()
 		a := uint32(x)
 		if !isPublicIPv4(a) {
-			// Try the other half of the word before drawing again.
-			for a = uint32(x >> 32); !isPublicIPv4(a); a = uint32(p.Sum64()) {
+			for a = uint32(x >> 32); !isPublicIPv4(a); a = uint32(p.Uint64()) {
 			}
 		}
 		putIPv4(b, a)
 	case IPv4Loopback:
-		x := uint32(p.Sum64()) & 0xffffff
+		x := uint32(p.Uint64()) & 0xffffff
 		for x == 0 || x == 0xffffff {
-			x = uint32(p.Sum64()) & 0xffffff
+			x = uint32(p.Uint64()) & 0xffffff
 		}
 		putIPv4(b, 127<<24|x)
 	case IPv4CGNAT:
-		x := uint32(p.Sum64())
+		x := uint32(p.Uint64())
 		b[0], b[1] = 100, 64|(byte(x)&0x3f)
 		b[2], b[3] = byte(x>>8), byte(x>>16)
 	case IPv4Documentation:
-		v := boundedFrom(p.Sum64(), 3*256, p)
+		v := boundedFrom(p.Uint64(), 3*256, p)
 		switch v >> 8 {
 		case 0:
 			b[0], b[1], b[2] = 192, 0, 2
@@ -161,7 +188,7 @@ func fillIP(b []byte, kind IPKind, p Provider) {
 		b[0] = (b[0] & 0x1f) | 0x20
 	case IPv6LinkLocal:
 		binary.BigEndian.PutUint64(b, 0xfe80<<48)
-		binary.LittleEndian.PutUint64(b[8:], p.Sum64())
+		binary.LittleEndian.PutUint64(b[8:], p.Uint64())
 	case IPv6SiteLocal:
 		fillRandomBytes(b, p)
 		b[0] = 0xfe
@@ -173,13 +200,10 @@ func fillIP(b []byte, kind IPKind, p Provider) {
 		fillRandomBytes(b, p)
 		b[0], b[1], b[2], b[3] = 0x20, 0x01, 0x0d, 0xb8
 	case IPv6Public:
-		hi := p.Sum64()&^(7<<61) | 1<<61
-		for !isPublicIPv6(hi) {
-			hi = p.Sum64()&^(7<<61) | 1<<61
-		}
-		lo := p.Sum64()
-		for lo == 0 || lo>>7 == 0x1fbffffffffffff || lo>>7 == 0x1ffffffffffffff {
-			lo = p.Sum64()
+		hi := ipv6Prefix(kind, p)
+		lo := p.Uint64()
+		for reservedInterfaceID(lo) {
+			lo = p.Uint64()
 		}
 		binary.BigEndian.PutUint64(b, hi)
 		binary.BigEndian.PutUint64(b[8:], lo)
@@ -187,10 +211,9 @@ func fillIP(b []byte, kind IPKind, p Provider) {
 		IPv6AdminLocalMulticast, IPv6SiteLocalMulticast, IPv6OrgLocalMulticast, IPv6GlobalMulticast:
 		fillRandomBytes(b, p)
 		b[0] = 0xff
-		// RFC 4291 flag T=1 marks a transient, non-IANA group.
 		b[1] = 0x10 | multicastScope(kind)
 	default:
-		putIPv4(b, uint32(p.Sum64()))
+		putIPv4(b, uint32(p.Uint64()))
 	}
 }
 
@@ -213,9 +236,6 @@ func multicastScope(kind IPKind) byte {
 	}
 }
 
-// ipv4FirstOctet classifies the first octet of an IPv4 address: 0 means the
-// whole /8 is public, 1 that it is special-purpose, and 2 that the answer
-// depends on the following octets.
 var ipv4FirstOctet = func() (class [256]uint8) {
 	class[0], class[10], class[127] = 1, 1, 1
 	for a := 224; a < 256; a++ {
@@ -227,9 +247,6 @@ var ipv4FirstOctet = func() (class [256]uint8) {
 	return class
 }()
 
-// isPublicIPv4 reports whether x, interpreted big-endian, lies outside every
-// IANA special-purpose, private, and bogon IPv4 range. See RFC 6890. The
-// first-octet table settles about 95% of addresses without a call.
 func isPublicIPv4(x uint32) bool {
 	switch ipv4FirstOctet[x>>24] {
 	case 0:
@@ -240,41 +257,35 @@ func isPublicIPv4(x uint32) bool {
 	return isPublicIPv4Slow(x)
 }
 
-// isPublicIPv4Slow decides the first octets that hold both public and
-// special-purpose ranges.
 func isPublicIPv4Slow(x uint32) bool {
 	a, b, c := byte(x>>24), byte(x>>16), byte(x>>8)
 	switch {
-	case a == 100 && b&0xc0 == 64: // 100.64.0.0/10 (CGN)
+	case a == 100 && b&0xc0 == 64:
 		return false
-	case a == 169 && b == 254: // 169.254.0.0/16
+	case a == 169 && b == 254:
 		return false
-	case a == 172 && b&0xf0 == 16: // 172.16.0.0/12
+	case a == 172 && b&0xf0 == 16:
 		return false
-	case a == 192 && b == 0 && c == 0: // 192.0.0.0/24
+	case a == 192 && b == 0 && c == 0:
 		return false
-	case a == 192 && b == 0 && c == 2: // 192.0.2.0/24 (TEST-NET-1)
+	case a == 192 && b == 0 && c == 2:
 		return false
-	case a == 192 && b == 88 && c == 99: // 192.88.99.0/24
+	case a == 192 && b == 31 && c == 196, a == 192 && b == 52 && c == 193, a == 192 && b == 175 && c == 48:
 		return false
-	case a == 192 && b == 168: // 192.168.0.0/16
+	case a == 192 && b == 88 && c == 99:
 		return false
-	case a == 198 && b&0xfe == 18: // 198.18.0.0/15
+	case a == 192 && b == 168:
 		return false
-	case a == 198 && b == 51 && c == 100: // 198.51.100.0/24 (TEST-NET-2)
+	case a == 198 && b&0xfe == 18:
 		return false
-	case a == 203 && b == 0 && c == 113: // 203.0.113.0/24 (TEST-NET-3)
+	case a == 198 && b == 51 && c == 100:
+		return false
+	case a == 203 && b == 0 && c == 113:
 		return false
 	}
 	return true
 }
 
-// isPublicIPv6 reports whether the big-endian high 64 bits hi of an address in
-// 2000::/3 lie outside every block of the IANA IPv6 Special-Purpose Address
-// Registry: 2001::/23 (IETF protocol assignments, including Teredo,
-// benchmarking, AMT, AS112, ORCHID, and drone remote ID), 2001:db8::/32
-// (documentation), 2002::/16 (6to4), 2620:4f:8000::/48 (direct delegation
-// AS112), 3fff::/20 (documentation), and 5f00::/16 (SRv6 SIDs).
 func isPublicIPv6(hi uint64) bool {
 	switch {
 	case hi>>41 == 0x2001<<7:
@@ -296,7 +307,9 @@ func isPublicIPv6(hi uint64) bool {
 // 6-byte MAC address or an 8-byte EUI-64. Supported kinds are
 // [IPv6LinkLocal], [IPv6Global], [IPv6Public], [IPv6UniqueLocal],
 // [IPv6SiteLocal], and [IPv6Documentation]; other kinds or lengths return nil.
-func (network) IPv6EUI64(dst []byte, kind IPKind, mac net.HardwareAddr) net.IP {
+// A reserved interface identifier also returns nil for [IPv6Public].
+// The source may overlap the destination. Invalid input leaves the destination unchanged.
+func (g NetworkGenerator) IPv6EUI64(dst []byte, kind IPKind, mac net.HardwareAddr) net.IP {
 	switch kind {
 	case IPv6LinkLocal, IPv6Global, IPv6Public, IPv6UniqueLocal, IPv6SiteLocal, IPv6Documentation:
 	default:
@@ -305,21 +318,55 @@ func (network) IPv6EUI64(dst []byte, kind IPKind, mac net.HardwareAddr) net.IP {
 	if len(mac) != 6 && len(mac) != 8 {
 		return nil
 	}
+	var iid [8]byte
+	putModifiedEUI64(iid[:], mac)
+	if kind == IPv6Public && reservedInterfaceID(binary.BigEndian.Uint64(iid[:])) {
+		return nil
+	}
+	s := openProvider(g.provider)
+	defer s.close()
+	hi := ipv6Prefix(kind, s.provider)
 	b := fixedBytes(dst, net.IPv6len)
-	fillIP(b, kind, currentProvider())
-	putModifiedEUI64(b[8:], mac)
+	binary.BigEndian.PutUint64(b, hi)
+	copy(b[8:], iid[:])
 	return net.IP(b)
 }
 
-// putModifiedEUI64 writes the RFC 4291 Appendix A modified EUI-64 of a 6-byte
-// MAC or 8-byte EUI-64 into b[:8].
+func ipv6Prefix(kind IPKind, p provider) uint64 {
+	switch kind {
+	case IPv6LinkLocal:
+		return 0xfe80 << 48
+	case IPv6Documentation:
+		return 0x20010db8<<32 | uint64(uint32(p.Uint64()))
+	case IPv6UniqueLocal:
+		return p.Uint64()&0x00ffffffffffffff | 0xfd<<56
+	case IPv6SiteLocal:
+		return p.Uint64()&0x003fffffffffffff | 0xfec0<<48
+	case IPv6Public:
+		for {
+			hi := p.Uint64()&^(7<<61) | 1<<61
+			if isPublicIPv6(hi) {
+				return hi
+			}
+		}
+	default:
+		return p.Uint64()&^(7<<61) | 1<<61
+	}
+}
+
+func reservedInterfaceID(iid uint64) bool {
+	return iid == 0 || iid>>7 == 0x1fbffffffffffff || iid>>7 == 0x1ffffffffffffff
+}
+
 func putModifiedEUI64(b []byte, mac net.HardwareAddr) {
 	if len(mac) == 8 {
-		copy(b[:8], mac)
+		source := [8]byte(mac)
+		copy(b[:8], source[:])
 	} else {
-		b[0], b[1], b[2] = mac[0], mac[1], mac[2]
+		source := [6]byte(mac)
+		b[0], b[1], b[2] = source[0], source[1], source[2]
 		b[3], b[4] = 0xff, 0xfe
-		b[5], b[6], b[7] = mac[3], mac[4], mac[5]
+		b[5], b[6], b[7] = source[3], source[4], source[5]
 	}
 	b[0] ^= 0x02
 }

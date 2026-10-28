@@ -27,8 +27,8 @@ const defaultURL = "https://standards-oui.ieee.org/oui/oui.csv"
 // vendor pairs a display name with an anchored pattern over the registry's
 // exact "Organization Name" column.
 type vendor struct {
-	name  string
 	match *regexp.Regexp
+	name  string
 }
 
 func v(name, pattern string) vendor {
@@ -139,9 +139,9 @@ var vendors = []vendor{
 
 // entry is one selected assignment.
 type entry struct {
-	oui    [3]byte
 	vendor string
 	org    string
+	oui    [3]byte
 }
 
 func main() {

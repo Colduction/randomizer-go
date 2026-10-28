@@ -1,24 +1,24 @@
 # randomizer-go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/colduction/randomizer-go.svg)](https://pkg.go.dev/github.com/colduction/randomizer-go)
-![GitHub License](https://img.shields.io/github/license/Colduction/randomizer-go)
+[![Go version](https://img.shields.io/github/go-mod/go-version/colduction/randomizer-go)](./go.mod)
+[![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen)](./go.mod)
+[![GitHub License](https://img.shields.io/github/license/Colduction/randomizer-go)](./LICENSE)
 
-**randomizer-go** is a fast, allocation-aware, goroutine-safe random data generation library for Go.
-It covers numbers, byte/string alphabets, network values and addresses, link-layer and Bluetooth identifiers, mobile equipment identifiers, and configurable random providers.
+**randomizer-go** generates random numbers, words, network addresses, telecom identifiers, permutations, and weighted samples. It offers caller-owned buffers, isolated generator instances, reproducible seeds, and an explicit cryptographically secure mode.
+
+Package helpers use Go's public `math/rand/v2` source. Sampling algorithms avoid range-reduction bias when their source supplies uniform random words. Use `NewSecure` for secrets; the fast and seeded modes are pseudorandom generators rather than promises of physical true randomness.
 
 ## Features
 
-- **Numbers**: signed and unsigned integers, bounded intervals, and floats in `[0, 1)`
-- **Byte fill**: `Read(p []byte)` fills caller-owned buffers with zero allocations
-- **Strings and bytes**: built-in alphabets, custom dictionaries, append APIs, and no adjacent duplicate bytes
-- **Network**: enum-based API for IPv4, IPv6, `netip` values, MAC, EUI-64, IEEE 802c local addresses, Bluetooth device addresses, ports, VLAN IDs, ASNs, VNI, flow labels, MPLS labels, CIDRs
-- **Telecom**: IMEI, IMEISV, ICCID, and MEID with correct check digits
-- **Providers**: lock-free per-thread ChaCha8 default, `math/rand`, `math/rand/v2`, `crypto/rand`, or custom providers
-- **Hash pool**: optional `maphash.Hash` reuse and a SplitMix64 provider through `NewHashPool`
+- **Numbers**: generic signed and unsigned integers, bounded intervals, floats in `[0, 1)`, and six bulk fill operations.
+- **Words**: independent symbols by default, weighted custom byte dictionaries, explicit no-adjacent-repeat mode, and append APIs.
+- **Sampling**: in-place shuffle, ordered samples without replacement, and reusable exact integer-weighted distributions.
+- **Network**: IPv4, IPv6, `netip` addresses and prefixes, hardware and Bluetooth identifiers, ports, VLANs, ASNs, VNI, flow labels, and MPLS labels.
+- **Telecom**: IMEI, IMEISV, ICCID, and MEID with format constraints and applicable check digits.
+- **Sources**: a fast package source, secure OS-backed generation, seeded ChaCha8, and direct constructors for custom sources and readers.
 
-## Requirements
-
-- Go **1.27** or later
+See [PERFORMANCE.md](PERFORMANCE.md) for current benchmark results, CPU and memory profiles, and reproducible profiling commands.
 
 ## Installation
 
@@ -32,38 +32,54 @@ go get github.com/colduction/randomizer-go@latest
 package main
 
 import (
-	"fmt"
-	"net"
+    "fmt"
 
-	"github.com/colduction/randomizer-go"
+    "github.com/colduction/randomizer-go"
 )
 
 func main() {
-	fmt.Println(randomizer.Int[int64]())
-	fmt.Println(randomizer.IntInterval(int64(1), int64(100)))
-	fmt.Println(randomizer.Float64())
+    g := randomizer.New()
+    fmt.Println(g.Int[int64]())
+    fmt.Println(g.IntInterval(int64(1), int64(100)))
+    fmt.Println(g.Word.String(randomizer.AlphaNumericAlphabet, 24))
+    fmt.Println(g.Network.Addr(randomizer.IPv6Public))
+    fmt.Println(g.Telecom.String(randomizer.IMEI, randomizer.TelecomOptions{}))
 
-	fmt.Println(randomizer.Word.String(randomizer.HexLowerAlphabet, 16))
-	fmt.Println(randomizer.Word.String(randomizer.AlphaNumericAlphabet, 24))
-	fmt.Println(randomizer.Word.Custom("ABCDEFGH", 12))
+    secure := randomizer.NewSecure()
+    fmt.Println(secure.Word.String(randomizer.Base64URLAlphabet, 32))
 
-	fmt.Println(randomizer.Network.IP(nil, randomizer.IPv4Public))
-	fmt.Println(randomizer.Network.Addr(randomizer.IPv6Public))
-
-	var macBuf [8]byte
-	mac := randomizer.Network.Hardware(macBuf[:0], randomizer.HardwareMACRealOUI, randomizer.HardwareOptions{})
-	fmt.Println(net.HardwareAddr(mac))
-
-	fmt.Println(randomizer.Telecom.String(randomizer.IMEI, randomizer.TelecomOptions{}))
-
-	var raw [32]byte
-	_, _ = randomizer.Read(raw[:])
+    var raw [32]byte
+    _, _ = secure.Read(raw[:])
 }
 ```
 
+## Choose a Generator
+
+Choose the source once and use the generator's numeric methods and `Word`, `Network`, and `Telecom` fields.
+
+| Purpose                                    | Constructor       |
+| ------------------------------------------ | ----------------- |
+| General random data                        | `New()`           |
+| Secret tokens and cryptographic randomness | `NewSecure()`     |
+| Reproducible ChaCha8 output                | `NewSeeded(seed)` |
+
+```go
+fast := randomizer.New()
+secure := randomizer.NewSecure()
+seeded := randomizer.NewSeeded([32]byte{1, 2, 3})
+
+n := seeded.Uint[uint64]()
+address := secure.Network.Addr(randomizer.IPv6Any)
+word := fast.Word.String(randomizer.HexLowerAlphabet, 16)
+```
+
+The zero `Generator` uses the fast package source. Package functions and the package `Word`, `Network`, and `Telecom` handles use that fixed source; constructing an instance does not change other callers. Share one generator when multiple callers need the same synchronized stream.
+
+Generators permit concurrent use. Keep generator fields unchanged while sharing a generator. Equal seeds and identical sequential calls reproduce results within one package version; concurrent scheduling and output sequences across versions are unspecified. A caller-supplied all-zero seed is used unchanged and is not a secure seed.
+
 ## Numbers
 
-With `DefaultProvider`, number functions are zero-allocation and safe for concurrent use.
+Package functions use the fast source; instance methods use the selected source.
 
 ```go
 n := randomizer.Int[int64]()
@@ -74,11 +90,34 @@ f32 := randomizer.Float32()
 f64 := randomizer.Float64()
 ```
 
-`IntInterval` and `UintInterval` return values in `[min, max)` using Lemire's nearly divisionless bounded sampling: one multiplication in the common case, a division only with probability below `span / 2^64`. Equal bounds return the bound. Swapped bounds are corrected.
+Intervals are `[min, max)`. Reversed bounds are swapped; equal bounds return the bound without consuming randomness. Signed intervals support the full signed endpoint range. Floats occupy uniform 24-bit and 53-bit grids in `[0, 1)`.
+
+Bounded draws use multiplication with rejection to avoid modulo bias, following [Lemire's nearly divisionless method](https://arxiv.org/abs/1805.10941).
+
+### Bulk Fills
+
+All six operations fill existing storage. Their package forms and generator methods have the same names. Built-in synchronized sources lock once per batch, rather than once per output.
+
+```go
+g := randomizer.NewSeeded([32]byte{42})
+signed := make([]int64, 256)
+unsigned := make([]uint64, 256)
+floats32 := make([]float32, 256)
+floats64 := make([]float64, 256)
+
+g.FillInt(signed)
+g.FillUint(unsigned)
+g.FillIntInterval(signed, -50, 50)
+g.FillUintInterval(unsigned, 1, 1000)
+g.FillFloat32(floats32)
+g.FillFloat64(floats64)
+```
+
+Empty buffers consume no random words. Equal interval bounds fill a constant. Bounded batches use [Brackett-Rozinsky and Lemire's batched ranged sampling](https://arxiv.org/abs/2408.06213); power-of-two ranges extract disjoint groups of bits.
 
 ## Words
 
-`Word.String` and `Word.Bytes` allocate the returned output. `Word.Append` writes into caller-owned capacity and can be zero-allocation. All word generators avoid adjacent duplicate bytes.
+`IndependentSymbols` is the default: each byte is sampled with replacement. Repeated adjacent bytes are valid. `String` and `Bytes` allocate their output; `Append` reuses caller capacity. Lengths count bytes, and custom dictionaries are not interpreted as Unicode characters.
 
 ```go
 s := randomizer.Word.String(randomizer.DecimalAlphabet, 12)
@@ -86,7 +125,12 @@ b := randomizer.Word.Bytes(randomizer.Base64URLAlphabet, 32)
 
 buf := make([]byte, 0, 32)
 buf = randomizer.Word.Append(buf, randomizer.AlphaNumericAlphabet, 32)
+
+noRepeats := randomizer.Word.WithMode(randomizer.NoAdjacentRepeats)
+constrained := noRepeats.String(randomizer.AlphaNumericAlphabet, 32)
 ```
+
+`WithMode` returns a copy without changing the original handle or its source. Unknown modes select `IndependentSymbols`; unknown alphabets select `DecimalAlphabet`.
 
 Built-in alphabets:
 
@@ -103,9 +147,11 @@ Built-in alphabets:
 | `Base32Alphabet`       | RFC 4648 base32 without padding          |
 | `Base64URLAlphabet`    | RFC 4648 URL-safe base64 without padding |
 
-Symbols are drawn with the batched ranged integer method of Brackett-Rozinsky and Lemire: one 64-bit random word yields up to 19 decimal digits, 15 hexadecimal digits, or 10 alphanumeric symbols through chained multiplications, with a single rejection test per word and no divisions. After the first symbol, each position is drawn from the other `n-1` positions and shifted past the previous one, so unique dictionaries never retry a symbol.
+Power-of-two alphabets extract independent bit groups. Other built-in alphabets use fixed-length multiplication batches with exact rejection. Under `NoAdjacentRepeats`, unique dictionaries sample the other positions directly; weighted dictionaries use cumulative weights with the preceding byte's entire weight removed.
 
-Custom dictionaries sample bytes directly. Repeated dictionary bytes increase weight.
+### Custom Dictionaries
+
+Every dictionary position has equal weight, so duplicate bytes increase their probability.
 
 ```go
 s := randomizer.Word.Custom("AABCXYZ9", 16)
@@ -118,11 +164,47 @@ dst = randomizer.Word.AppendCustom(dst, "AABCXYZ9", 16)
 dst = randomizer.Word.AppendCustomFromBytes(dst[:3], []byte("AABCXYZ9"), 16)
 ```
 
-Custom string functions return `""` when `length <= 0`, dictionary is empty, or length is greater than 1 and the dictionary cannot avoid adjacent duplicates. Custom byte functions return `nil` for those invalid cases. Append variants return `dst` unchanged.
+With `"AABC"`, independent draws give `A` probability `1/2` and `B` and `C` probability `1/4` each. Under `NoAdjacentRepeats`, the first byte uses those weights; after `A`, `B` and `C` are equally likely; after `B`, `A` has probability `2/3` and `C` has probability `1/3`. That mode intentionally introduces dependence. Its restriction applies within the newly generated segment, without considering the destination prefix.
+
+Nonpositive lengths and empty dictionaries return `""`, `nil`, or an unchanged append destination. Under `NoAdjacentRepeats`, requests longer than one byte also fail when the dictionary has only one distinct byte. Independent mode accepts constant dictionaries. Byte dictionaries are not retained; append destinations may overlap them, and sampling uses the original dictionary contents.
+
+## Shuffle and Samples Without Replacement
+
+```go
+g := randomizer.NewSeeded([32]byte{7})
+values := []string{"red", "green", "blue"}
+g.Shuffle(values)
+
+var selected [5]int
+if err := g.SampleIndices(selected[:], 1000000); err != nil {
+    panic(err)
+}
+```
+
+`Shuffle` uses an unbiased in-place Fisher-Yates permutation with no auxiliary allocation. Nil and singleton slices need no random words. `SampleIndices` fills the supplied slice with distinct indices in `[0, population)`. Its output is an ordered random sample, not a sorted list; every ordered sample has equal probability.
+
+Shuffle recycles unused randomness within each operation using the exact widening-multiplication method of [Draper and Saad](https://www.cs.cmu.edu/~fsaad/assets/papers/2026-DraperEtAl-SODA.pdf). Recycler state is not retained across operations. Current measurements and profiling commands are recorded in [PERFORMANCE.md](PERFORMANCE.md).
+
+A negative population or a destination longer than the population returns `ErrInvalidSample` without changing the destination or consuming randomness. Empty samples succeed. Full samples permute the destination in place; partial samples use at most storage proportional to the sample size, independent of the population. Small samples use Floyd's ordered construction, described in [Bentley and Floyd's original paper](https://doi.org/10.1145/30401.315746). Package-level `Shuffle` and `SampleIndices` use the fast source.
+
+## Weighted Sampling
+
+```go
+choices, err := randomizer.NewWeighted([]uint64{1, 3, 0})
+if err != nil {
+    panic(err)
+}
+g := randomizer.NewSeeded([32]byte{9})
+index := choices.Index(g)
+```
+
+The example chooses indices `0` and `1` with probabilities `1/4` and `3/4`; index `2` is never chosen. `NewWeighted` copies the distribution into an immutable integer alias table. Construction takes linear time and storage, and draws take expected constant time without allocating, following the [Walker-Vose alias method](https://doi.org/10.1109/32.92917) with integer thresholds and overflow-safe arithmetic.
+
+Empty or all-zero weights return `ErrInvalidWeights`. A total exceeding `math.MaxUint64` returns `ErrWeightOverflow`; totals equal to that limit are supported, including when intermediate scaled weights need more than 64 bits. Individual zero weights are valid. `Index(nil)` uses the fast source, and a nil or zero-value `Weighted` returns `-1`. The table can be shared concurrently; callers must use separate destination storage for mutable sampling operations.
 
 ## Network
 
-Network APIs use small kind enums instead of many single-purpose methods. Slice results allocate only when `dst` capacity is too small; the `netip` methods never allocate.
+Network APIs use small kind enums. Use `g.Network` to select an instance source; the examples below use the package fast source. Address slices reuse caller capacity, and the `netip` methods avoid output allocations. Bluetooth cipher creation and key changes can allocate.
 
 ### IP
 
@@ -147,7 +229,7 @@ addr := randomizer.Network.Addr(randomizer.IPv6UniqueLocal) // netip.Addr, zero 
 
 Validity rules applied by the generators:
 
-- `IPv4Public` excludes every IANA special-purpose, private, and bogon range (RFC 6890).
+- `IPv4Public` excludes the special-purpose, private, documentation, multicast, and reserved ranges encoded in the package, following RFC 6890. It does not consult live routing tables.
 - `IPv4LinkLocal` stays within `169.254.1.0`–`169.254.254.255` (RFC 3927 reserves the first and last /24).
 - `IPv4Documentation` picks one of the three RFC 5737 blocks with equal probability; `IPv4CGNAT` is `100.64.0.0/10` (RFC 6598).
 - `IPv6LinkLocal` is a strict `fe80::/64` prefix with a random interface identifier (RFC 4291 §2.5.6).
@@ -210,7 +292,7 @@ rpa := randomizer.Network.Hardware(nil, randomizer.HardwareBluetoothRPA, randomi
 | `HardwareBluetoothNRPA`        | Non-resolvable private address: top two bits `00`, 46 random bits that are neither all zero nor all one                               |
 | `HardwareBluetoothRPA`         | Resolvable private address: 22-bit `prand` under top bits `01`, then `hash = ah(IRK, prand)` (AES-128) when `IRK` is set, else random |
 
-Bluetooth addresses are returned most-significant byte first, the order used in `XX:XX:XX:XX:XX:XX` notation. Resolvable private addresses with an `IRK` are computed with `crypto/aes`; the cipher for the most recent key is cached, so repeated calls with one key allocate nothing.
+Bluetooth addresses are returned most-significant byte first, the order used in `XX:XX:XX:XX:XX:XX` notation. Resolvable private addresses with an `IRK` are computed with `crypto/aes`; the cipher for the most recent key is cached, and steady-state calls reuse cipher and scratch storage.
 
 ### Values
 
@@ -267,7 +349,7 @@ host := randomizer.Network.AddrIn(prefix)
 
 ## Telecom
 
-`Telecom.String` allocates; `Telecom.Append` writes into caller-owned capacity. Invalid options make `String` return `""` and `Append` return `dst` unchanged.
+`Telecom.String` allocates; `Telecom.Append` writes into caller-owned capacity. Use `g.Telecom` for an instance source. Invalid options make `String` return `""` and `Append` return `dst` unchanged.
 
 ```go
 imei := randomizer.Telecom.String(randomizer.IMEI, randomizer.TelecomOptions{})
@@ -285,111 +367,55 @@ meid := randomizer.Telecom.String(randomizer.MEID, randomizer.TelecomOptions{})
 | `ICCID`  | ITU-T E.118: `89`, an assigned E.164 country code (or `IIN`), account digits, Luhn check digit; 19 digits by default, `Length` 18–20 |
 | `MEID`   | 14 uppercase hexadecimal digits with a regional code in `[A0, FF]`                                                                   |
 
-## Providers
+## Custom Sources and Readers
 
-All package generators read from the active `Provider`. `SetProvider` atomically swaps it and returns the prior provider. Passing `nil` restores `DefaultProvider`.
-
-```go
-type Provider interface {
-	Read([]byte) (int, error)
-	Sum([]byte) []byte
-	Sum32() uint32
-	Sum64() uint64
-}
-```
-
-### DefaultProvider
-
-`DefaultProvider` draws from the Go runtime's per-thread ChaCha8 generator, the source behind `math/rand/v2` (see _Secure Randomness in Go 1.22_ and the C2SP `chacha8rand` specification). Every OS thread owns its own state, so it never locks and throughput scales linearly with goroutines. It is seeded by the operating system and cannot be reseeded; use `NewUint64Provider` for reproducible sequences.
+Custom inputs produce a generator directly:
 
 ```go
-var buf [256]byte
-_, _ = randomizer.Read(buf[:])
+import "math/rand/v2"
 
-n64 := randomizer.DefaultProvider.Sum64()
-n32 := randomizer.DefaultProvider.Sum32()
-dst := randomizer.DefaultProvider.Sum(existing)
+custom := randomizer.FromSource(rand.NewPCG(1, 2))
+reader := randomizer.FromReader(rand.NewChaCha8([32]byte{4}))
+
+value := custom.Uint[uint64]()
+word := reader.Word.String(randomizer.AlphaNumericAlphabet, 24)
 ```
 
-### NewUint64Provider
+`FromSource` accepts the standard [`math/rand/v2.Source`](https://pkg.go.dev/math/rand/v2#Source) interface, so a custom source needs only `Uint64() uint64`. It consumes that source's actual stream. `FromReader` accepts an `io.Reader` and uses [`io.ReadFull`](https://pkg.go.dev/io#ReadFull) semantics. Both constructors return `*Generator` and synchronize mutable input, holding one lock for each bulk operation.
 
-`NewUint64Provider(source interface{ Uint64() uint64 }) Provider` seeds a SplitMix64 counter by calling `source.Uint64()` once. Equal seeds give equal sequences. The counter is one shared atomic word, so heavy concurrent use serializes on a single cache line; prefer `DefaultProvider` when reproducibility is not needed.
+Wrap each mutable input once, then share the resulting generator or its handles. Callers must relinquish unsynchronized access to the input. Independently wrapping the same unsafe source or reader creates independent locks and is unsupported.
 
-```go
-import (
-	mrand "math/rand"
-	randv2 "math/rand/v2"
-)
+A nil interface passed to either constructor panics immediately. Typed-nil inputs are invalid and may panic when used. Only `New()` and zero-value generators select the fast default without an explicit input.
 
-p1 := randomizer.NewUint64Provider(mrand.New(mrand.NewSource(42)))
-p2 := randomizer.NewUint64Provider(randv2.New(randv2.NewPCG(1, 2)))
+`New()` and package helpers use public [`math/rand/v2`](https://pkg.go.dev/math/rand/v2) functions. `NewSeeded` initializes synchronized ChaCha8 from all 32 supplied seed bytes. `NewSecure` uses [`crypto/rand`](https://pkg.go.dev/crypto/rand) directly and never falls back to a weaker source. Use `NewSecure` for security-sensitive output.
 
-chacha := randv2.NewChaCha8([32]byte{})
-p3 := randomizer.NewUint64Provider(chacha)
-```
-
-### NewReaderProvider
-
-`NewReaderProvider(reader io.Reader) Provider` reads every value from the supplied reader.
-
-```go
-import cryptorand "crypto/rand"
-
-p := randomizer.NewReaderProvider(cryptorand.Reader)
-previous := randomizer.SetProvider(p)
-defer randomizer.SetProvider(previous)
-```
-
-This works with `crypto/rand.Reader` and readers such as `math/rand/v2.ChaCha8`. The reader must be safe for concurrent use when installed as the package provider. `crypto/rand.Reader` is safe. A shared `ChaCha8` value should be protected or used through `NewUint64Provider`.
-
-`Read` returns errors. `Sum`, `Sum32`, and `Sum64` panic on reader errors because their signatures cannot return errors.
-
-## HashPool
-
-`NewHashPool(size int) *hashPool` creates an independent SplitMix64 provider and a `sync.Pool` of `maphash.Hash` values. It returns `nil` for `size <= 0`; nil receiver methods are safe.
-
-```go
-pool := randomizer.NewHashPool(16)
-
-h := pool.Get()
-h.WriteString("seed-data")
-fmt.Printf("%016x\n", h.Sum64())
-pool.Put(h)
-```
+`Generator.Read` returns the number of bytes filled and any full-read error, and may leave partial output. Scalar and structured generation panic when the reader cannot supply a word. Bulk fills and append operations may already have written part of their destination when a source panics.
 
 ## OUI Table
 
-`HardwareMACRealOUI`, `HardwareEUI64RealOUI`, and `HardwareBluetoothPublic` pick from `oui_table.go`, a generated list of universal unicast OUIs of well-known vendors taken from the IEEE MA-L registry. Regenerate it with:
+`HardwareMACRealOUI`, `HardwareEUI64RealOUI`, and `HardwareBluetoothPublic` select from `oui_table.go`, a generated list of universal unicast OUIs of well-known vendors from the IEEE MA-L registry.
 
 ```bash
 go generate ./...
 ```
 
-The generator (`internal/ouigen`) downloads `https://standards-oui.ieee.org/oui/oui.csv`, keeps the lowest three assignments of every allowlisted vendor, and fails when a vendor no longer matches the registry so renames are noticed.
+The generator in `internal/ouigen` downloads the [IEEE MA-L registry](https://standards-oui.ieee.org/oui/oui.csv), keeps the lowest three assignments for each allowlisted vendor, and fails if a vendor no longer matches so registry changes can be reviewed.
 
 ## Thread Safety
 
-Package generators and provider replacement are safe for concurrent use. `DefaultProvider` uses per-thread runtime state and never contends. Providers from `NewUint64Provider` and `NewHashPool` share one atomic counter. Providers installed with `NewReaderProvider` are only as concurrent-safe as their wrapped reader.
-
-## Breaking Changes
-
-- `DefaultProvider` is the runtime ChaCha8 provider, no longer a `*hashPool`; type assertions on it break. `NewHashPool` still returns the SplitMix64 provider.
-- `HardwareEUI64FromMAC` now returns the IEEE EUI-64 (U/L bit kept). The previous output, the IPv6 interface identifier form, is `HardwareModifiedEUI64FromMAC`.
-- `IPv6LinkLocal` produces `fe80::/64` addresses; the 54 bits after the prefix are zero as RFC 4291 requires.
-- IPv6 multicast kinds set the transient flag: the second byte is `0x11`, `0x12`, ... instead of `0x01`, `0x02`, ...
-- `IPv4LinkLocal` no longer produces `169.254.0.x` or `169.254.255.x`.
-- Word generators changed their sampling algorithm; sequences produced under a seeded provider differ from earlier versions.
-- `UUID` and `AppendUUID` were removed.
+Package generation and all generator constructors support concurrent calls. Share a generator without replacing its exported handles, and give concurrent writes separate destination storage. `FromSource` and `FromReader` serialize wrapped mutable state. Wrap each unsafe input once and share that generator. Weighted tables are immutable after construction. No call changes another generator's selected source.
 
 ## References
 
-- Daniel Lemire, _Fast Random Integer Generation in an Interval_, ACM Transactions on Modeling and Computer Simulation 29(1), 2019.
-- Nevin Brackett-Rozinsky and Daniel Lemire, _Batched Ranged Random Integer Generation_, Software: Practice and Experience 55(1), 2024.
-- Russ Cox and Filippo Valsorda, _Secure Randomness in Go 1.22_, and the C2SP `chacha8rand` specification.
-- Guy L. Steele Jr., Doug Lea, and Christine H. Flood, _Fast Splittable Pseudorandom Number Generators_, OOPSLA 2014 (SplitMix64).
-- IEEE Std 802c-2017 and RFC 8948 (SLAP quadrants); RFC 4291, RFC 9542 (EUI-64); Bluetooth Core Specification 5.4 Vol 6 Part B §1.3 and Vol 3 Part H §2.2.2 (device addresses, `ah`).
-- RFC 6890, RFC 5737, RFC 6598, RFC 3927, RFC 2526, and the IANA IPv6 Special-Purpose Address Registry; RFC 7274 (MPLS); RFC 5398, 6793, 6996, 7300, 7607 (ASN).
-- GSMA TS.06 (IMEI), 3GPP TS 23.003 (IMEISV), ITU-T E.118 (ICCID), 3GPP2 S.R0048 (MEID).
+- Daniel Lemire, [Fast Random Integer Generation in an Interval](https://arxiv.org/abs/1805.10941), ACM TOMACS 29(1), 2019.
+- Nevin Brackett-Rozinsky and Daniel Lemire, [Batched Ranged Random Integer Generation](https://arxiv.org/abs/2408.06213), Software: Practice and Experience 55(1), 2025; first published online in 2024.
+- Jon Bentley and Bob Floyd, [A Sample of Brilliance](https://doi.org/10.1145/30401.315746), Communications of the ACM 30(9), 1987.
+- Michael D. Vose, [A Linear Algorithm for Generating Random Numbers with a Given Distribution](https://doi.org/10.1109/32.92917), IEEE Transactions on Software Engineering 17(9), 1991.
+- Thomas L. Draper and Feras A. Saad, [Efficient Online Random Sampling via Randomness Recycling](https://www.cs.cmu.edu/~fsaad/assets/papers/2026-DraperEtAl-SODA.pdf), SODA 2026.
+- Russ Cox and Filippo Valsorda, [Secure Randomness in Go 1.22](https://go.dev/blog/chacha8rand), and the [C2SP ChaCha8Rand specification](https://c2sp.org/chacha8rand).
+- IEEE Std 802c-2017; RFC 8948, 4291, and 9542; Bluetooth Core Specification device-address and `ah` sections.
+- RFC 6890, 5737, 6598, 3927, and 2526; RFC 7274; RFC 5398, 6793, 6996, 7300, and 7607; IANA special-purpose registries.
+- GSMA TS.06, 3GPP TS 23.003, ITU-T E.118, and 3GPP2 S.R0048 for telecom formats.
 
 ## License
 
